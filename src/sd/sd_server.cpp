@@ -18,12 +18,10 @@
 #include "transport/transport.h"
 #include "someip/message.h"
 #include <unordered_map>
-#include <mutex>
 #include <atomic>
-#include <thread>
 #include <chrono>
+#include "platform/byteorder.h"
 #include <algorithm>
-#include <arpa/inet.h>
 
 namespace someip {
 namespace sd {
@@ -91,7 +89,7 @@ public:
         send_stop_offer_messages();
 
         // Clear offered services
-        std::scoped_lock lock(offered_services_mutex_);
+        platform::ScopedLock lock(offered_services_mutex_);
         offered_services_.clear();
 
         // Leave multicast group
@@ -108,7 +106,7 @@ public:
                       const std::string& unicast_endpoint,
                       const std::string& multicast_endpoint) {
 
-        std::scoped_lock lock(offered_services_mutex_);
+        platform::ScopedLock lock(offered_services_mutex_);
 
         // Check if service already offered
         auto it = std::find_if(offered_services_.begin(), offered_services_.end(),
@@ -144,7 +142,7 @@ public:
     }
 
     bool stop_offer_service(uint16_t service_id, uint16_t instance_id) {
-        std::scoped_lock lock(offered_services_mutex_);
+        platform::ScopedLock lock(offered_services_mutex_);
 
         auto it = std::find_if(offered_services_.begin(), offered_services_.end(),
             [&](const OfferedService& svc) {
@@ -164,7 +162,7 @@ public:
     }
 
     bool update_service_ttl(uint16_t service_id, uint16_t instance_id, uint32_t ttl_seconds) {
-        std::scoped_lock lock(offered_services_mutex_);
+        platform::ScopedLock lock(offered_services_mutex_);
 
         auto it = std::find_if(offered_services_.begin(), offered_services_.end(),
             [&](const OfferedService& svc) {
@@ -201,13 +199,12 @@ public:
         // Convert multicast address to network byte order
         in_addr_t multicast_addr = inet_addr(config_.multicast_address.c_str());
         multicast_option->set_ipv4_address(multicast_addr);
-        multicast_option->set_port(htons(config_.multicast_port));
+        multicast_option->set_port(someip_htons(config_.multicast_port));
         response_message.add_option(std::move(multicast_option));
 
         // Set option index in entry
-        if (auto* entry = dynamic_cast<EventGroupEntry*>(response_message.get_entries()[0].get())) {
-            entry->set_index1(0);  // Reference first option
-        }
+        auto* entry = static_cast<EventGroupEntry*>(response_message.get_entries()[0].get());
+        entry->set_index1(0);  // Reference first option
 
         // Send unicast response to client
         // Parse client_address (format: "ip:port" or just "ip")
@@ -233,7 +230,7 @@ public:
     }
 
     std::vector<ServiceInstance> get_offered_services() const {
-        std::scoped_lock lock(offered_services_mutex_);
+        platform::ScopedLock lock(offered_services_mutex_);
         std::vector<ServiceInstance> result;
 
         for (const auto& service : offered_services_) {
@@ -278,13 +275,13 @@ private:
     }
 
     void start_offer_timer() {
-        if (offer_timer_thread_.joinable()) {
+        if (offer_timer_thread_ && offer_timer_thread_->joinable()) {
             return;
         }
 
-        offer_timer_thread_ = std::thread([this]() {
+        offer_timer_thread_ = std::make_unique<platform::Thread>([this]() {
             while (running_) {
-                std::this_thread::sleep_for(next_offer_delay_);
+                platform::this_thread::sleep_for(next_offer_delay_);
 
                 if (!running_) {
                     break;
@@ -304,13 +301,13 @@ private:
     }
 
     void stop_offer_timer() {
-        if (offer_timer_thread_.joinable()) {
-            offer_timer_thread_.join();
+        if (offer_timer_thread_ && offer_timer_thread_->joinable()) {
+            offer_timer_thread_->join();
         }
     }
 
     void send_periodic_offers() {
-        std::scoped_lock lock(offered_services_mutex_);
+        platform::ScopedLock lock(offered_services_mutex_);
 
         auto now = std::chrono::steady_clock::now();
         for (auto& service : offered_services_) {
@@ -325,7 +322,7 @@ private:
     }
 
     void send_stop_offer_messages() {
-        std::scoped_lock lock(offered_services_mutex_);
+        platform::ScopedLock lock(offered_services_mutex_);
 
         for (const auto& service : offered_services_) {
             send_service_stop_offer(service);
@@ -365,10 +362,9 @@ private:
         sd_message.add_option(std::move(endpoint_option));
 
         // Set option index in the entry (first option, so index 0)
-        if (auto* entry = dynamic_cast<ServiceEntry*>(sd_message.get_entries()[0].get())) {
-            entry->set_index1(0);  // Reference first option
-            entry->set_index2(0);  // No second option
-        }
+        auto* offer_entry_ptr = static_cast<ServiceEntry*>(sd_message.get_entries()[0].get());
+        offer_entry_ptr->set_index1(0);  // Reference first option
+        offer_entry_ptr->set_index2(0);  // No second option
 
         // Create SOME/IP message for SD
         Message someip_message(MessageId(0xFFFF, SOMEIP_SD_METHOD_ID), RequestId(0x0000, 0x0000),
@@ -453,7 +449,7 @@ private:
     }
 
     void handle_find_service(const ServiceEntry& find_entry, const transport::Endpoint& sender) {
-        std::scoped_lock lock(offered_services_mutex_);
+        platform::ScopedLock lock(offered_services_mutex_);
 
         // Check if we offer the requested service
         for (const auto& service : offered_services_) {
@@ -536,10 +532,9 @@ private:
         sd_message.add_option(std::move(endpoint_option));
 
         // Set option index in the entry (first option, so index 0)
-        if (auto* entry = dynamic_cast<ServiceEntry*>(sd_message.get_entries()[0].get())) {
-            entry->set_index1(0);  // Reference first option
-            entry->set_index2(0);  // No second option
-        }
+        auto* offer_entry_ptr = static_cast<ServiceEntry*>(sd_message.get_entries()[0].get());
+        offer_entry_ptr->set_index1(0);  // Reference first option
+        offer_entry_ptr->set_index2(0);  // No second option
 
         // Create SOME/IP message for SD
         Message someip_message(MessageId(0xFFFF, SOMEIP_SD_METHOD_ID), RequestId(0x0000, 0x0000),
@@ -557,9 +552,9 @@ private:
     std::shared_ptr<transport::UdpTransport> transport_;
 
     std::vector<OfferedService> offered_services_;
-    mutable std::mutex offered_services_mutex_;
+    mutable platform::Mutex offered_services_mutex_;
 
-    std::thread offer_timer_thread_;
+    std::unique_ptr<platform::Thread> offer_timer_thread_;
     std::chrono::milliseconds next_offer_delay_;
     std::atomic<bool> running_;
 };

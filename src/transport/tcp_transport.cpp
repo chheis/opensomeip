@@ -12,14 +12,8 @@
  ********************************************************************************/
 
 #include "transport/tcp_transport.h"
+#include "platform/net.h"
 #include "common/result.h"
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <sys/select.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
 #include <cstring>
 #include <iostream>
 #include <algorithm>
@@ -93,7 +87,7 @@ Result TcpTransport::send_message(const Message& message, const Endpoint& endpoi
 }
 
 MessagePtr TcpTransport::receive_message() {
-    std::scoped_lock lock(queue_mutex_);
+    platform::ScopedLock lock(queue_mutex_);
     if (message_queue_.empty()) {
         return nullptr;
     }
@@ -144,10 +138,10 @@ Result TcpTransport::start() {
     running_ = true;
 
     // Start receive thread
-    receive_thread_ = std::thread(&TcpTransport::receive_loop, this);
+    receive_thread_ = std::make_unique<platform::Thread>(&TcpTransport::receive_loop, this);
 
     // Start connection monitor thread
-    connection_thread_ = std::thread(&TcpTransport::connection_monitor_loop, this);
+    connection_thread_ = std::make_unique<platform::Thread>(&TcpTransport::connection_monitor_loop, this);
 
     return Result::SUCCESS;
 }
@@ -164,16 +158,16 @@ Result TcpTransport::stop() {
 
     // Close listen socket if in server mode
     if (server_mode_ && listen_socket_fd_ != -1) {
-        close(listen_socket_fd_);
+        someip_close_socket(listen_socket_fd_);
         listen_socket_fd_ = -1;
     }
 
     // Wait for threads to finish
-    if (receive_thread_.joinable()) {
-        receive_thread_.join();
+    if (receive_thread_ && receive_thread_->joinable()) {
+        receive_thread_->join();
     }
-    if (connection_thread_.joinable()) {
-        connection_thread_.join();
+    if (connection_thread_ && connection_thread_->joinable()) {
+        connection_thread_->join();
     }
 
     return Result::SUCCESS;
@@ -210,14 +204,18 @@ int TcpTransport::accept_connection() {
     sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
 
-    // For server mode, make the accept blocking temporarily
-    int flags = fcntl(listen_socket_fd_, F_GETFL, 0);
-    fcntl(listen_socket_fd_, F_SETFL, flags & ~O_NONBLOCK);
+    if (someip_set_blocking(listen_socket_fd_) < 0) {
+        return -1;
+    }
 
     int client_fd = accept(listen_socket_fd_, (sockaddr*)&client_addr, &client_len);
 
-    // Restore non-blocking mode
-    fcntl(listen_socket_fd_, F_SETFL, flags);
+    if (someip_set_nonblocking(listen_socket_fd_) < 0) {
+        if (client_fd >= 0) {
+            someip_close_socket(client_fd);
+        }
+        return -1;
+    }
 
     if (client_fd < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -226,7 +224,6 @@ int TcpTransport::accept_connection() {
         return -1;
     }
 
-    // Set socket options for client connection (blocking for simplicity)
     setup_socket_options(client_fd, true);
 
     return client_fd;
@@ -263,26 +260,21 @@ Result TcpTransport::bind_socket() {
 }
 
 Result TcpTransport::setup_socket_options(int socket_fd, bool blocking) {
-    int flags = fcntl(socket_fd, F_GETFL, 0);
-    if (flags < 0) {
-        return Result::NETWORK_ERROR;
-    }
-
     if (blocking) {
-        flags &= ~O_NONBLOCK;  // Clear non-blocking flag
+        if (someip_set_blocking(socket_fd) < 0) {
+            return Result::NETWORK_ERROR;
+        }
     } else {
-        flags |= O_NONBLOCK;   // Set non-blocking flag
+        if (someip_set_nonblocking(socket_fd) < 0) {
+            return Result::NETWORK_ERROR;
+        }
     }
 
-    if (fcntl(socket_fd, F_SETFL, flags) < 0) {
-        return Result::NETWORK_ERROR;
-    }
-
-    // TCP keep-alive
+    // TCP keep-alive (not available on all Zephyr targets)
+#if !defined(__ZEPHYR__) || defined(CONFIG_ARCH_POSIX)
     if (config_.keep_alive) {
         int keep_alive = 1;
 #ifdef __APPLE__
-        // macOS uses different socket option levels and names
         setsockopt(socket_fd, IPPROTO_TCP, TCP_KEEPALIVE, &keep_alive, sizeof(keep_alive));
         int keep_alive_interval = static_cast<int>(config_.keep_alive_interval.count() / 1000);
         setsockopt(socket_fd, IPPROTO_TCP, TCP_KEEPINTVL, &keep_alive_interval, sizeof(keep_alive_interval));
@@ -294,6 +286,7 @@ Result TcpTransport::setup_socket_options(int socket_fd, bool blocking) {
         setsockopt(socket_fd, SOL_TCP, TCP_KEEPCNT, &keep_alive, sizeof(keep_alive));
 #endif
     }
+#endif
 
     // Send/receive timeouts
     struct timeval send_timeout = {
@@ -321,7 +314,11 @@ Result TcpTransport::connect_internal(const Endpoint& endpoint) {
     connection_.state = TcpConnectionState::CONNECTING;
     connection_.remote_endpoint = endpoint;
 
+#if defined(__ZEPHYR__)
+    int connect_result = zsock_connect(connection_.socket_fd, (sockaddr*)&addr, sizeof(addr));
+#else
     int connect_result = ::connect(connection_.socket_fd, (sockaddr*)&addr, sizeof(addr));
+#endif
 
     if (connect_result == 0) {
         // Connected immediately
@@ -375,13 +372,13 @@ Result TcpTransport::connect_internal(const Endpoint& endpoint) {
 }
 
 void TcpTransport::disconnect_internal() {
-    std::scoped_lock lock(connection_mutex_);
+    platform::ScopedLock lock(connection_mutex_);
 
     if (connection_.socket_fd != -1) {
         connection_.state = TcpConnectionState::DISCONNECTING;
 
-        shutdown(connection_.socket_fd, SHUT_RDWR);
-        close(connection_.socket_fd);
+        someip_shutdown_socket(connection_.socket_fd);
+        someip_close_socket(connection_.socket_fd);
         connection_.socket_fd = -1;
 
         connection_.state = TcpConnectionState::DISCONNECTED;
@@ -405,7 +402,7 @@ void TcpTransport::receive_loop() {
                 // Check connection limit before accepting
                 if (active_connections_.load() >= config_.max_connections) {
                     // Too many connections, wait a bit before checking again
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    platform::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
                 }
 
@@ -424,14 +421,14 @@ void TcpTransport::receive_loop() {
                         }
                     } else {
                         // Already have a connection, close this one
-                        close(client_fd);
+                        someip_close_socket(client_fd);
                     }
                 }
             }
         }
 
         if (!is_connected()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            platform::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
 
@@ -442,7 +439,7 @@ void TcpTransport::receive_loop() {
             // Try to parse messages from buffer
             MessagePtr message;
             if (parse_message_from_buffer(buffer, message)) {
-                std::scoped_lock lock(queue_mutex_);
+                platform::ScopedLock lock(queue_mutex_);
                 message_queue_.push({message, connection_.remote_endpoint});
                 connection_.update_activity();
 
@@ -461,7 +458,7 @@ void TcpTransport::receive_loop() {
             }
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        platform::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
 
@@ -478,7 +475,7 @@ void TcpTransport::connection_monitor_loop() {
             }
         }
 
-        std::this_thread::sleep_for(std::chrono::seconds(30));
+        platform::this_thread::sleep_for(std::chrono::seconds(30));
     }
 }
 
@@ -585,15 +582,9 @@ bool TcpTransport::parse_message_from_buffer(std::vector<uint8_t>& buffer, Messa
     buffer.erase(buffer.begin(), buffer.begin() + total_message_size);
 
     // Parse message
-    try {
-        message = std::make_shared<Message>();
-        if (message->deserialize(message_data)) {
-            return true;
-        }
-    } catch (const std::exception& e) {
-        // Message parsing exception
-    } catch (...) {
-        // Unknown message parsing exception
+    message = std::make_shared<Message>();
+    if (message && message->deserialize(message_data)) {
+        return true;
     }
 
     return false;

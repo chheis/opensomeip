@@ -1,0 +1,113 @@
+name: Zephyr Build & Test
+on:
+  push:
+    branches: ["main","feature/zephyr-port"]
+    paths-ignore: ['**/*.md','docs/**','LICENSE','.cursor/**']
+  pull_request:
+    branches: ["main"]
+    paths-ignore: ['**/*.md','docs/**','LICENSE','.cursor/**']
+
+jobs:
+  host-build:
+    name: Host Build + Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build & Test
+        run: |
+          cmake -B build -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF -DSAFETY_LEVEL=NONE
+          cmake --build build -j$(nproc)
+          cd build && ctest --output-on-failure
+
+  zephyr-native-sim:
+    name: Zephyr native_sim
+    runs-on: ubuntu-latest
+    container: { image: "ghcr.io/zephyrproject-rtos/ci:v0.27.4" }
+    env:
+      ZEPHYR_SDK_INSTALL_DIR: /opt/zephyr-sdk-0.17.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Zephyr SDK
+        run: |
+          wget -q https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.17.0/zephyr-sdk-0.17.0_linux-x86_64_minimal.tar.xz
+          tar xf zephyr-sdk-0.17.0_linux-x86_64_minimal.tar.xz -C /opt/
+          /opt/zephyr-sdk-0.17.0/setup.sh -c
+      - name: Init Zephyr
+        run: |
+          pip install jsonschema
+          west init /tmp/zp && cd /tmp/zp
+          west update --narrow -o=--depth=1 && west zephyr-export
+      - name: Build & run test_core
+        env: { ZEPHYR_BASE: /tmp/zp/zephyr }
+        run: |
+          west build -b native_sim zephyr/tests/test_core -d build/ns_tc --pristine auto
+          # test_core is a real test binary. native_sim may keep running after main()
+          # and hit timeout=124 even when tests already passed, so validate output.
+          if timeout 30 build/ns_tc/zephyr/zephyr.exe > /tmp/test_core.log 2>&1; then
+            rc=0
+          else
+            rc=$?
+          fi
+          cat /tmp/test_core.log
+          if [ "$rc" -eq 124 ]; then
+            grep -Eq "=== Results: [0-9]+ passed, 0 failed ===" /tmp/test_core.log || exit 1
+          elif [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
+      - name: Build & run test_transport
+        env: { ZEPHYR_BASE: /tmp/zp/zephyr }
+        run: |
+          west build -b native_sim zephyr/tests/test_transport -d build/ns_tp --pristine auto
+          # test_transport follows the same timeout handling as test_core.
+          if timeout 30 build/ns_tp/zephyr/zephyr.exe > /tmp/test_transport.log 2>&1; then
+            rc=0
+          else
+            rc=$?
+          fi
+          cat /tmp/test_transport.log
+          if [ "$rc" -eq 124 ]; then
+            grep -Eq "=== Results: [0-9]+ passed, 0 failed ===" /tmp/test_transport.log || exit 1
+          elif [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
+      - name: Build & run someip_echo
+        env: { ZEPHYR_BASE: /tmp/zp/zephyr }
+        run: |
+          west build -b native_sim zephyr/samples/someip_echo -d build/ns_echo --pristine auto
+          # someip_echo is a sample that may run continuously.
+          # Accept timeout exit code 124, but fail on any other non-zero code.
+          if timeout 30 build/ns_echo/zephyr/zephyr.exe; then
+            rc=0
+          else
+            rc=$?
+          fi
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 124 ]; then
+            exit "$rc"
+          fi
+      - name: Build someip_sd_client
+        env: { ZEPHYR_BASE: /tmp/zp/zephyr }
+        run: west build -b native_sim zephyr/samples/someip_sd_client -d build/ns_sd --pristine auto
+
+  zephyr-s32k344-build:
+    name: Zephyr S32K344 cross-compile
+    runs-on: ubuntu-latest
+    container: { image: "ghcr.io/zephyrproject-rtos/ci:v0.27.4" }
+    env:
+      ZEPHYR_SDK_INSTALL_DIR: /opt/zephyr-sdk-0.17.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Zephyr SDK
+        run: |
+          wget -q https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.17.0/zephyr-sdk-0.17.0_linux-x86_64_minimal.tar.xz
+          wget -q https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.17.0/toolchain_linux-x86_64_arm-zephyr-eabi.tar.xz
+          tar xf zephyr-sdk-0.17.0_linux-x86_64_minimal.tar.xz -C /opt/
+          tar xf toolchain_linux-x86_64_arm-zephyr-eabi.tar.xz -C /opt/zephyr-sdk-0.17.0/
+          /opt/zephyr-sdk-0.17.0/setup.sh -c
+      - name: Init Zephyr
+        run: |
+          pip install jsonschema
+          west init /tmp/zp && cd /tmp/zp
+          west update --narrow -o=--depth=1 && west zephyr-export
+      - name: Build hello_s32k (mr_canhubk3)
+        env: { ZEPHYR_BASE: /tmp/zp/zephyr }
+        run: west build -b mr_canhubk3 zephyr/samples/hello_s32k -d build/s32k344

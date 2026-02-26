@@ -13,11 +13,6 @@
 
 #include "transport/udp_transport.h"
 #include "common/result.h"
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <cstring>
 #include <iostream>
 
@@ -36,7 +31,9 @@ UdpTransport::UdpTransport(const Endpoint& local_endpoint, const UdpTransportCon
       config_(config),
       running_(false) {
     if (!local_endpoint_.is_valid()) {
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
         throw std::invalid_argument("Invalid local endpoint");
+#endif
     }
 }
 
@@ -78,7 +75,7 @@ Result UdpTransport::send_message(const Message& message, const Endpoint& endpoi
 }
 
 MessagePtr UdpTransport::receive_message() {
-    std::scoped_lock lock(queue_mutex_);
+    platform::ScopedLock lock(queue_mutex_);
     if (receive_queue_.empty()) {
         return nullptr;
     }
@@ -131,13 +128,13 @@ Result UdpTransport::start() {
 
     result = bind_socket();
     if (result != Result::SUCCESS) {
-        close(socket_fd_);
+        someip_close_socket(socket_fd_);
         socket_fd_ = -1;
         return result;
     }
 
     running_ = true;
-    receive_thread_ = std::thread(&UdpTransport::receive_loop, this);
+    receive_thread_ = std::make_unique<platform::Thread>(&UdpTransport::receive_loop, this);
 
     return Result::SUCCESS;
 }
@@ -152,15 +149,14 @@ Result UdpTransport::stop() {
 
     // Close socket to wake up receive thread
     if (socket_fd_ >= 0) {
-        // Shutdown first to wake up any blocking calls
-        shutdown(socket_fd_, SHUT_RDWR);
-        close(socket_fd_);
+        someip_shutdown_socket(socket_fd_);
+        someip_close_socket(socket_fd_);
         socket_fd_ = -1;
     }
 
     // Wait for receive thread to finish
-    if (receive_thread_.joinable()) {
-        receive_thread_.join();
+    if (receive_thread_ && receive_thread_->joinable()) {
+        receive_thread_->join();
     }
 
     return Result::SUCCESS;
@@ -171,7 +167,7 @@ bool UdpTransport::is_running() const {
 }
 
 Result UdpTransport::join_multicast_group(const std::string& multicast_address) {
-    std::scoped_lock lock(socket_mutex_);
+    platform::ScopedLock lock(socket_mutex_);
 
     if (socket_fd_ < 0) {
         return Result::NOT_CONNECTED;
@@ -216,7 +212,7 @@ Result UdpTransport::join_multicast_group(const std::string& multicast_address) 
 }
 
 Result UdpTransport::leave_multicast_group(const std::string& multicast_address) {
-    std::scoped_lock lock(socket_mutex_);
+    platform::ScopedLock lock(socket_mutex_);
 
     if (socket_fd_ < 0) {
         return Result::NOT_CONNECTED;
@@ -238,7 +234,7 @@ Result UdpTransport::leave_multicast_group(const std::string& multicast_address)
 }
 
 Result UdpTransport::create_socket() {
-    std::scoped_lock lock(socket_mutex_);
+    platform::ScopedLock lock(socket_mutex_);
 
     socket_fd_ = socket(AF_INET, SOCK_DGRAM, 0);
     if (socket_fd_ < 0) {
@@ -249,7 +245,7 @@ Result UdpTransport::create_socket() {
     if (config_.reuse_address) {
         int reuse = 1;
         if (setsockopt(socket_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
-            close(socket_fd_);
+            someip_close_socket(socket_fd_);
             socket_fd_ = -1;
             return Result::NETWORK_ERROR;
         }
@@ -269,7 +265,7 @@ Result UdpTransport::create_socket() {
     if (config_.enable_broadcast) {
         int broadcast = 1;
         if (setsockopt(socket_fd_, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast)) < 0) {
-            close(socket_fd_);
+            someip_close_socket(socket_fd_);
             socket_fd_ = -1;
             return Result::NETWORK_ERROR;
         }
@@ -286,9 +282,8 @@ Result UdpTransport::create_socket() {
 
     // Set blocking/non-blocking mode
     if (!config_.blocking) {
-        int flags = fcntl(socket_fd_, F_GETFL, 0);
-        if (flags < 0 || fcntl(socket_fd_, F_SETFL, flags | O_NONBLOCK) < 0) {
-            close(socket_fd_);
+        if (someip_set_nonblocking(socket_fd_) < 0) {
+            someip_close_socket(socket_fd_);
             socket_fd_ = -1;
             return Result::NETWORK_ERROR;
         }
@@ -298,7 +293,7 @@ Result UdpTransport::create_socket() {
 }
 
 Result UdpTransport::bind_socket() {
-    std::scoped_lock lock(socket_mutex_);
+    platform::ScopedLock lock(socket_mutex_);
 
     sockaddr_in addr = create_sockaddr(local_endpoint_);
     if (bind(socket_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
@@ -349,7 +344,7 @@ void UdpTransport::receive_loop() {
             if (message->deserialize(buffer)) {  // Deserialize from the received buffer
                 // Add to queue
                 {
-                    std::scoped_lock lock(queue_mutex_);
+                    platform::ScopedLock lock(queue_mutex_);
                     receive_queue_.push(message);
                 }
                 queue_cv_.notify_one();
@@ -365,7 +360,7 @@ void UdpTransport::receive_loop() {
         } else if (result == Result::TIMEOUT && !config_.blocking) {
             // Timeout in non-blocking mode - just continue polling
             // Small delay to prevent tight polling loop
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            platform::this_thread::sleep_for(std::chrono::milliseconds(10));
         } else {
             // Network or other error, notify listener
             if (listener_) {
@@ -374,7 +369,7 @@ void UdpTransport::receive_loop() {
 
             if (!config_.blocking) {
                 // In non-blocking mode, add delay to prevent busy loops on errors
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                platform::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
             // In blocking mode, we only get here on actual errors, no delay needed
         }
@@ -382,7 +377,7 @@ void UdpTransport::receive_loop() {
 }
 
 Result UdpTransport::send_data(const std::vector<uint8_t>& data, const Endpoint& endpoint) {
-    std::scoped_lock lock(socket_mutex_);
+    platform::ScopedLock lock(socket_mutex_);
 
     if (socket_fd_ < 0) {
         return Result::NOT_CONNECTED;
