@@ -12,12 +12,13 @@
 #include <condition_variable>
 #include <chrono>
 
+#include "platform/host/host_condition_variable.h"
+
 namespace someip {
 namespace platform {
 
 using Thread = std::thread;
 using Mutex = std::mutex;
-using ConditionVariable = std::condition_variable;
 
 namespace this_thread {
 using std::this_thread::sleep_for;
