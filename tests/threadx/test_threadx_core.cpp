@@ -9,6 +9,11 @@
  *
  * @tests REQ_PLATFORM_THREADX_001
  * @tests REQ_PLATFORM_THREADX_002
+ * @tests REQ_PAL_MUTEX_LOCK, REQ_PAL_MUTEX_UNLOCK, REQ_PAL_MUTEX_TRYLOCK
+ * @tests REQ_PAL_CV_NOTIFY_ONE
+ * @tests REQ_PAL_THREAD_CREATE, REQ_PAL_THREAD_JOINABLE, REQ_PAL_THREAD_JOIN
+ * @tests REQ_PAL_SLEEP_DURATION, REQ_PAL_SLEEP_ZERO
+ * @tests REQ_PAL_MEM_ALLOC, REQ_PAL_MEM_INDEPENDENT
  *
  * ThreadX requires:
  *   main() → tx_kernel_enter() → tx_application_define() → threads run

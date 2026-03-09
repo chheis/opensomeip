@@ -22,10 +22,6 @@ namespace tp {
 
 /**
  * @brief SOME/IP-TP Manager implementation
- * @implements REQ_ARCH_001
- * @implements REQ_TP_050, REQ_TP_051, REQ_TP_052, REQ_TP_053, REQ_TP_054, REQ_TP_055, REQ_TP_056, REQ_TP_057
- * @implements REQ_TP_060, REQ_TP_061, REQ_TP_062, REQ_TP_063
- * @implements REQ_TP_050_E01, REQ_TP_050_E02
  * @satisfies feat_req_someiptp_400
  * @satisfies feat_req_someiptp_401
  */
@@ -137,7 +133,7 @@ bool TpManager::handle_received_segment(const TpSegment& segment, std::vector<ui
     return reassembler_->process_segment(segment, complete_message);
 }
 
-TpResult TpManager::acknowledge_segments(uint32_t transfer_id, const std::vector<uint16_t>& segments_acknowledged) {
+TpResult TpManager::acknowledge_segments(uint32_t transfer_id, const std::vector<uint16_t>& /*segments_acknowledged*/) {
     platform::ScopedLock lock(transfers_mutex_);
 
     auto it = active_transfers_.find(transfer_id);
@@ -228,6 +224,11 @@ TpStatistics TpManager::get_statistics() const {
     return statistics_;
 }
 
+/**
+ * @brief Update TP manager configuration
+ * @implements REQ_TP_070, REQ_TP_071, REQ_TP_072, REQ_TP_073, REQ_TP_074, REQ_TP_075
+ * @implements REQ_TP_076, REQ_TP_077, REQ_TP_078
+ */
 void TpManager::update_config(const TpConfig& config) {
     config_ = config;
     segmenter_->update_config(config);

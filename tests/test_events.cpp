@@ -18,6 +18,11 @@ using namespace someip::events;
 
 /**
  * @brief Events and Subscriptions unit tests
+ *
+ * Covers event type/enum definitions and struct construction.
+ * Functional event delivery, subscription routing, and session handling
+ * tests belong in dedicated integration tests.
+ *
  * @tests REQ_ARCH_001
  * @tests feat_req_someip_720
  * @tests feat_req_someip_730

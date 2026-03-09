@@ -27,6 +27,9 @@ using namespace someip::rpc;
  * @tests REQ_ARCH_002
  * @tests feat_req_someip_700
  * @tests feat_req_someip_710
+ * @tests REQ_MSG_114, REQ_MSG_115, REQ_MSG_116, REQ_MSG_118
+ * @tests REQ_MSG_127, REQ_MSG_128, REQ_MSG_129, REQ_MSG_130, REQ_MSG_131
+ * @tests REQ_MSG_132a, REQ_MSG_132b, REQ_MSG_133a, REQ_MSG_133b, REQ_MSG_133c
  */
 class RpcTest : public ::testing::Test {
 protected:
@@ -83,8 +86,8 @@ TEST_F(RpcTest, ServerMethodRegistration) {
     RpcServer server(test_service_id_);
 
     // Should be able to register a method
-    auto handler = [](uint16_t client_id, uint16_t session_id,
-                     const std::vector<uint8_t>& input,
+    auto handler = [](uint16_t /*client_id*/, uint16_t /*session_id*/,
+                     const std::vector<uint8_t>& /*input*/,
                      std::vector<uint8_t>& output) -> RpcResult {
         output = {0x01, 0x02, 0x03};
         return RpcResult::SUCCESS;

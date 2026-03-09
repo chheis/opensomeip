@@ -24,20 +24,6 @@ namespace someip {
 
 /**
  * @brief SOME/IP Message implementation
- * @implements REQ_ARCH_001
- * @implements REQ_ARCH_003
- * @implements REQ_MSG_001, REQ_MSG_002, REQ_MSG_003
- * @implements REQ_MSG_010, REQ_MSG_011, REQ_MSG_012
- * @implements REQ_MSG_020, REQ_MSG_021, REQ_MSG_022
- * @implements REQ_MSG_030, REQ_MSG_031
- * @implements REQ_MSG_040, REQ_MSG_041
- * @implements REQ_MSG_050, REQ_MSG_051, REQ_MSG_052, REQ_MSG_053, REQ_MSG_054, REQ_MSG_055
- * @implements REQ_MSG_056, REQ_MSG_057, REQ_MSG_058, REQ_MSG_059
- * @implements REQ_MSG_060_TP, REQ_MSG_061_TP, REQ_MSG_062_TP
- * @implements REQ_MSG_070, REQ_MSG_072, REQ_MSG_073, REQ_MSG_074, REQ_MSG_075
- * @implements REQ_MSG_076, REQ_MSG_077, REQ_MSG_078, REQ_MSG_079, REQ_MSG_080
- * @implements REQ_MSG_090, REQ_MSG_091, REQ_MSG_092, REQ_MSG_093
- * @implements REQ_MSG_100
  * @satisfies feat_req_someip_538
  * @satisfies feat_req_someip_539
  * @satisfies feat_req_someip_540
@@ -153,6 +139,7 @@ Message& Message::operator=(Message&& other) noexcept {
  * @implements REQ_MSG_010, REQ_MSG_011
  * @implements REQ_MSG_020, REQ_MSG_021, REQ_MSG_022
  * @implements REQ_MSG_030, REQ_MSG_040, REQ_MSG_050, REQ_MSG_070
+ * @implements REQ_MSG_073, REQ_MSG_074, REQ_MSG_075, REQ_MSG_076, REQ_MSG_077, REQ_MSG_078, REQ_MSG_079, REQ_MSG_080
  * @implements REQ_MSG_090, REQ_MSG_091
  * @satisfies feat_req_someip_45
  */
@@ -193,11 +180,12 @@ std::vector<uint8_t> Message::serialize() const {
 /**
  * @brief Deserialize message from byte vector
  * @implements REQ_MSG_001, REQ_MSG_002, REQ_MSG_003
- * @implements REQ_MSG_010, REQ_MSG_011, REQ_MSG_012, REQ_MSG_014, REQ_MSG_015
- * @implements REQ_MSG_020, REQ_MSG_021, REQ_MSG_022
+ * @implements REQ_MSG_010, REQ_MSG_010_E01, REQ_MSG_011, REQ_MSG_012, REQ_MSG_014, REQ_MSG_015
+ * @implements REQ_MSG_020, REQ_MSG_020_E01, REQ_MSG_021, REQ_MSG_022
  * @implements REQ_MSG_030, REQ_MSG_031, REQ_MSG_032
- * @implements REQ_MSG_040, REQ_MSG_050, REQ_MSG_070
- * @implements REQ_MSG_090, REQ_MSG_092
+ * @implements REQ_MSG_040, REQ_MSG_040_E01, REQ_MSG_050, REQ_MSG_070
+ * @implements REQ_MSG_073, REQ_MSG_074, REQ_MSG_075, REQ_MSG_076, REQ_MSG_077, REQ_MSG_078, REQ_MSG_079, REQ_MSG_080
+ * @implements REQ_MSG_090, REQ_MSG_092, REQ_MSG_093
  * @implements REQ_MSG_100, REQ_MSG_100_E02, REQ_MSG_100_E03
  * @implements REQ_MSG_012_E01, REQ_MSG_014_E01, REQ_MSG_014_E02
  * @satisfies feat_req_someip_45, feat_req_someip_60, feat_req_someip_67
@@ -350,7 +338,7 @@ bool Message::is_valid() const {
  * @implements REQ_MSG_004_E01, REQ_MSG_004_E02
  */
 bool Message::has_valid_service_id() const {
-    uint16_t service_id = get_service_id();
+    [[maybe_unused]] uint16_t service_id = get_service_id();
 
     // REQ_MSG_004: Reserved Service ID 0x0000 is technically invalid per spec
     // But we allow it for default/uninitialized messages to maintain backward compatibility
@@ -406,7 +394,7 @@ bool Message::has_valid_length() const {
  * @implements REQ_MSG_025
  */
 bool Message::has_valid_client_id() const {
-    uint16_t client_id = get_client_id();
+    [[maybe_unused]] uint16_t client_id = get_client_id();
 
     // REQ_MSG_025: Client ID 0 is reserved for SD
     // But allow it for default/uninitialized messages
@@ -419,7 +407,7 @@ bool Message::has_valid_client_id() const {
  * @implements REQ_MSG_024_E01, REQ_MSG_024_E02
  */
 bool Message::has_valid_session_id() const {
-    uint16_t session_id = get_session_id();
+    [[maybe_unused]] uint16_t session_id = get_session_id();
 
     // REQ_MSG_023: Session ID 0 is disabled session handling
     // This is valid but indicates no session management
@@ -432,7 +420,7 @@ bool Message::has_valid_session_id() const {
 
 /**
  * @brief Validate Request ID components
- * @implements REQ_MSG_021, REQ_MSG_022
+ * @implements REQ_MSG_021, REQ_MSG_022, REQ_MSG_041
  */
 bool Message::has_valid_request_id() const {
     return has_valid_client_id() && has_valid_session_id();
@@ -441,7 +429,7 @@ bool Message::has_valid_request_id() const {
 /**
  * @brief Validate message type according to SOME/IP specification
  * @implements REQ_MSG_042, REQ_MSG_042_E01
- * @implements REQ_MSG_051, REQ_MSG_052, REQ_MSG_053, REQ_MSG_054, REQ_MSG_055
+ * @implements REQ_MSG_051, REQ_MSG_052, REQ_MSG_053, REQ_MSG_053_E01, REQ_MSG_054, REQ_MSG_054_E01, REQ_MSG_055
  * @implements REQ_MSG_057, REQ_MSG_058, REQ_MSG_059
  */
 bool Message::has_valid_message_type() const {
@@ -465,7 +453,7 @@ bool Message::has_valid_message_type() const {
 
 /**
  * @brief Check if message has TP flag set
- * @implements REQ_MSG_056
+ * @implements REQ_MSG_056, REQ_MSG_060_TP, REQ_MSG_061_TP, REQ_MSG_062_TP
  */
 bool Message::has_tp_flag() const {
     return someip::uses_tp(message_type_);
@@ -477,6 +465,10 @@ bool Message::has_tp_flag() const {
  * @implements REQ_MSG_032_E01, REQ_MSG_032_E02
  * @implements REQ_MSG_063, REQ_MSG_064, REQ_MSG_063_E01, REQ_MSG_063_E02
  * @implements REQ_MSG_072, REQ_MSG_072_E01
+ * @implements REQ_MSG_090_E01, REQ_MSG_093
+ * @implements REQ_COMPAT_001, REQ_COMPAT_001_E01, REQ_COMPAT_002, REQ_COMPAT_003_E01, REQ_COMPAT_004
+ * @implements REQ_COMPAT_005, REQ_COMPAT_010, REQ_COMPAT_010_E01, REQ_COMPAT_011
+ * @implements REQ_COMPAT_020, REQ_COMPAT_020_E01, REQ_COMPAT_021, REQ_COMPAT_022, REQ_COMPAT_023, REQ_COMPAT_024
  * @satisfies feat_req_someip_100, feat_req_someip_103, feat_req_someip_278
  */
 bool Message::has_valid_header() const {
@@ -523,6 +515,13 @@ bool Message::has_valid_header() const {
     // Also check that length_ is consistent
     uint32_t expected_length = 8 + e2e_size + payload_.size();
     if (length_ != expected_length) {
+        return false;
+    }
+
+    // REQ_MSG_053_E01: NOTIFICATION / TP_NOTIFICATION must carry return code E_OK
+    if ((message_type_ == MessageType::NOTIFICATION ||
+         message_type_ == MessageType::TP_NOTIFICATION) &&
+        return_code_ != ReturnCode::E_OK) {
         return false;
     }
 

@@ -26,9 +26,7 @@ namespace transport {
 
 /**
  * @brief TCP Transport constructor
- * @implements REQ_TRANSPORT_002
- * @implements REQ_TRANSPORT_003
- * @implements REQ_TRANSPORT_005
+ * @implements REQ_TRANSPORT_002a, REQ_TRANSPORT_002b, REQ_TRANSPORT_003a, REQ_TRANSPORT_003b, REQ_TRANSPORT_005
  * @satisfies feat_req_someip_850
  * @satisfies feat_req_someip_851
  */
@@ -67,13 +65,10 @@ Result TcpTransport::initialize(const Endpoint& local_endpoint) {
     return Result::SUCCESS;
 }
 
-Result TcpTransport::send_message(const Message& message, const Endpoint& endpoint) {
+Result TcpTransport::send_message(const Message& message, const Endpoint& /*endpoint*/) {
     if (!is_connected()) {
         return Result::NOT_CONNECTED;
     }
-
-    // For TCP, we ignore the endpoint parameter and send over the established connection
-    // The endpoint is mainly used for UDP routing
 
     // Serialize message
     std::vector<uint8_t> data = message.serialize();
@@ -147,6 +142,7 @@ Result TcpTransport::start() {
     return Result::SUCCESS;
 }
 
+/** @implements REQ_TRANSPORT_019 */
 Result TcpTransport::stop() {
     if (!running_) {
         return Result::SUCCESS;
@@ -197,31 +193,29 @@ Result TcpTransport::enable_server_mode(int backlog) {
     return Result::SUCCESS;
 }
 
+/** @implements REQ_TRANSPORT_003_E01 */
 int TcpTransport::accept_connection() {
     if (!server_mode_ || listen_socket_fd_ == -1) {
+        return -1;
+    }
+
+    // Use select() with a short timeout so the receive_loop can check running_
+    fd_set read_fds;
+    FD_ZERO(&read_fds);
+    FD_SET(listen_socket_fd_, &read_fds);
+
+    struct timeval tv = {0, 100000}; // 100ms
+    int sel = select(listen_socket_fd_ + 1, &read_fds, nullptr, nullptr, &tv);
+    if (sel <= 0) {
         return -1;
     }
 
     sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
 
-    if (someip_set_blocking(listen_socket_fd_) < 0) {
-        return -1;
-    }
-
     int client_fd = accept(listen_socket_fd_, (sockaddr*)&client_addr, &client_len);
 
-    if (someip_set_nonblocking(listen_socket_fd_) < 0) {
-        if (client_fd >= 0) {
-            someip_close_socket(client_fd);
-        }
-        return -1;
-    }
-
     if (client_fd < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            // Accept failed
-        }
         return -1;
     }
 
@@ -260,6 +254,7 @@ Result TcpTransport::bind_socket() {
     return Result::SUCCESS;
 }
 
+/** @implements REQ_TRANSPORT_017 */
 Result TcpTransport::setup_socket_options(int socket_fd, bool blocking) {
     if (blocking) {
         if (someip_set_blocking(socket_fd) < 0) {
@@ -305,6 +300,7 @@ Result TcpTransport::setup_socket_options(int socket_fd, bool blocking) {
     return Result::SUCCESS;
 }
 
+/** @implements REQ_TRANSPORT_002_E01, REQ_TRANSPORT_002_E02, REQ_TRANSPORT_002_E03, REQ_TRANSPORT_002_E04, REQ_TRANSPORT_016, REQ_TRANSPORT_016_E01, REQ_TRANSPORT_018 */
 Result TcpTransport::connect_internal(const Endpoint& endpoint) {
     sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -395,6 +391,7 @@ void TcpTransport::disconnect_internal() {
     }
 }
 
+/** @implements REQ_TRANSPORT_024 */
 void TcpTransport::receive_loop() {
     while (running_) {
         if (server_mode_) {
@@ -470,16 +467,19 @@ void TcpTransport::connection_monitor_loop() {
             auto time_since_activity = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - connection_.last_activity);
 
-            // Check for connection timeout
             if (time_since_activity > std::chrono::minutes(5)) {
                 disconnect_internal();
             }
         }
 
-        platform::this_thread::sleep_for(std::chrono::seconds(30));
+        // Sleep in short intervals so stop() can join promptly
+        for (int i = 0; i < 300 && running_; ++i) {
+            platform::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
 }
 
+/** @implements REQ_TRANSPORT_002_E01, REQ_TRANSPORT_002_E02, REQ_TRANSPORT_002_E03, REQ_TRANSPORT_002_E04 */
 Result TcpTransport::send_data(int socket_fd, const std::vector<uint8_t>& data) {
     size_t total_sent = 0;
     const uint8_t* buffer = data.data();
@@ -502,6 +502,7 @@ Result TcpTransport::send_data(int socket_fd, const std::vector<uint8_t>& data) 
     return Result::SUCCESS;
 }
 
+/** @implements REQ_TRANSPORT_002_E01, REQ_TRANSPORT_002_E02, REQ_TRANSPORT_002_E03, REQ_TRANSPORT_002_E04 */
 Result TcpTransport::receive_data(int socket_fd, std::vector<uint8_t>& data) {
     // Respect maximum receive buffer size from config
     size_t max_chunk_size = std::min(static_cast<size_t>(4096), config_.max_receive_buffer - data.size());

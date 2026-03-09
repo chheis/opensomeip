@@ -23,7 +23,6 @@ namespace transport {
 
 /**
  * @brief Transport endpoint implementation
- * @implements REQ_TRANSPORT_006
  */
 
 // Predefined endpoints
@@ -31,6 +30,7 @@ const Endpoint SOMEIP_SD_MULTICAST_ENDPOINT("239.118.122.69", 30490, TransportPr
 const Endpoint SOMEIP_DEFAULT_UDP_ENDPOINT("127.0.0.1", 30490, TransportProtocol::UDP);
 const Endpoint SOMEIP_DEFAULT_TCP_ENDPOINT("127.0.0.1", 30490, TransportProtocol::TCP);
 
+/** @implements REQ_TRANSPORT_006 */
 Endpoint::Endpoint()
     : address_("127.0.0.1"), port_(30490), protocol_(TransportProtocol::UDP) {
 }
@@ -67,12 +67,7 @@ Endpoint& Endpoint::operator=(Endpoint&& other) noexcept {
 }
 
 bool Endpoint::is_valid() const {
-    // Check port range (allow 0 for auto-assignment)
-    if (port_ > 65535) {
-        return false;
-    }
-
-    // Check address format
+    // port_ is uint16_t so it's always in [0, 65535]; no range check needed.
     return is_valid_ipv4(address_) || is_valid_ipv6(address_);
 }
 

@@ -114,6 +114,7 @@ public:
     }
 
 private:
+    /** @implements REQ_MSG_111, REQ_MSG_116, REQ_MSG_127, REQ_MSG_128, REQ_MSG_130, REQ_MSG_132A, REQ_MSG_133C, REQ_MSG_134, REQ_COMPAT_003 */
     void on_message_received(MessagePtr message, const transport::Endpoint& sender) override {
         // Check if this is for our service and is a request
         if (message->get_service_id() != service_id_ || !message->is_request()) {
@@ -146,18 +147,19 @@ private:
         }
     }
 
-    void on_connection_lost(const transport::Endpoint& endpoint) override {
+    void on_connection_lost(const transport::Endpoint& /*endpoint*/) override {
         // TODO: Handle connection loss
     }
 
-    void on_connection_established(const transport::Endpoint& endpoint) override {
+    void on_connection_established(const transport::Endpoint& /*endpoint*/) override {
         // TODO: Handle connection establishment
     }
 
-    void on_error(Result error) override {
+    void on_error(Result /*error*/) override {
         // TODO: Handle transport errors
     }
 
+    /** @implements REQ_MSG_115, REQ_MSG_117, REQ_MSG_117_E01 */
     void send_success_response(MessagePtr request, const transport::Endpoint& sender,
                               const std::vector<uint8_t>& return_values) {
         MessageId response_msg_id(request->get_service_id(), request->get_method_id());
@@ -171,6 +173,7 @@ private:
         }
     }
 
+    /** @implements REQ_MSG_115, REQ_MSG_117, REQ_MSG_117_E01, REQ_MSG_129 */
     void send_error_response(MessagePtr request, const transport::Endpoint& sender, ReturnCode error_code) {
         MessageId response_msg_id(request->get_service_id(), request->get_method_id());
         Message response(response_msg_id, request->get_request_id(),

@@ -39,7 +39,7 @@ public:
         : service_id_(service_id), instance_id_(instance_id),
           transport_(std::make_shared<transport::UdpTransport>(
               transport::Endpoint("127.0.0.1", 0))),
-          running_(false), next_session_id_(1) {
+          next_session_id_(1), running_(false) {
 
         transport_->set_listener(this);
     }
@@ -111,6 +111,7 @@ public:
         return true;
     }
 
+    /** @implements REQ_MSG_110, REQ_MSG_110_E01, REQ_MSG_119, REQ_MSG_121A, REQ_MSG_121B, REQ_MSG_121C, REQ_MSG_121_E01, REQ_MSG_121_E02, REQ_MSG_141 */
     bool publish_event(uint16_t event_id, const std::vector<uint8_t>& data) {
         if (!running_) {
             return false;
@@ -153,6 +154,7 @@ public:
         return publish_event(event_id, data);
     }
 
+    /** @implements REQ_MSG_124, REQ_MSG_124_E01, REQ_MSG_125, REQ_MSG_125_E01, REQ_MSG_126 */
     bool handle_subscription(uint16_t eventgroup_id, uint16_t client_id,
                            const std::vector<EventFilter>& filters) {
 
@@ -307,7 +309,7 @@ private:
         }
     }
 
-    void on_message_received(MessagePtr message, const transport::Endpoint& sender) override {
+    void on_message_received(MessagePtr /*message*/, const transport::Endpoint& /*sender*/) override {
         // Handle subscription/unsubscription messages
         // This would typically come from SD or direct subscription messages
     }
@@ -326,11 +328,11 @@ private:
         }
     }
 
-    void on_connection_established(const transport::Endpoint& endpoint) override {
+    void on_connection_established(const transport::Endpoint& /*endpoint*/) override {
         // Handle new client connections
     }
 
-    void on_error(Result error) override {
+    void on_error(Result /*error*/) override {
         // Handle transport errors
     }
 
