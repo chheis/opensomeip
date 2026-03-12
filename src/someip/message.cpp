@@ -190,7 +190,7 @@ std::vector<uint8_t> Message::serialize() const {
  * @implements REQ_MSG_012_E01, REQ_MSG_014_E01, REQ_MSG_014_E02
  * @satisfies feat_req_someip_45, feat_req_someip_60, feat_req_someip_67
  */
-bool Message::deserialize(const std::vector<uint8_t>& data) {
+bool Message::deserialize(const std::vector<uint8_t>& data, bool expect_e2e) {
     if (data.size() < MIN_MESSAGE_SIZE) {
         return false;
     }
@@ -241,65 +241,24 @@ bool Message::deserialize(const std::vector<uint8_t>& data) {
     }
     return_code_ = static_cast<ReturnCode>(data[offset++]);
 
-    // Check for E2E header (optional, inserted after Return Code)
-    // E2E headers are only present when E2E protection is enabled
-    // We detect them by checking if the length field accounts for an E2E header
+    // E2E headers are NOT auto-detected from wire bytes — heuristic detection
+    // is unreliable and produces platform-dependent results.  Per AUTOSAR
+    // SOME/IP, E2E protection is configuration-driven: the caller passes
+    // expect_e2e = true when the message is known to carry an E2E header.
     e2e_header_.reset();
-    size_t e2e_header_size = e2e::E2EHeader::get_header_size();
-    size_t actual_remaining = data.size() - offset;
-
-    // Try to detect E2E header by checking if the data size matches E2E expectations
-    if (actual_remaining >= e2e_header_size && length_ >= 8 + e2e_header_size) {
-        // Check if the remaining data size matches what we'd expect with an E2E header
-        // length_ should be: 8 + e2e_header_size + payload_size
-        size_t expected_payload_size = length_ - 8 - e2e_header_size;
-
-        // If the length field accounts for an E2E header AND the data size matches,
-        // then there should be an E2E header
-        if (data.size() == 16 + e2e_header_size + expected_payload_size) {
+    if (expect_e2e) {
+        constexpr size_t e2e_header_size = e2e::E2EHeader::get_header_size();
+        size_t remaining = data.size() - offset;
+        if (remaining >= e2e_header_size && length_ >= 8 + e2e_header_size) {
             e2e::E2EHeader header;
             if (header.deserialize(data, offset)) {
-                // Additional validation to prevent false positives:
-                // E2E headers should have reasonable values, not random payload data
-                // Check if the deserialized values look like legitimate E2E data:
-                // - Avoid detecting when all fields have the same repeated byte pattern (indicates payload data)
-                bool looks_like_payload_data = false;
-
-                // Check CRC for repeated byte pattern
-                uint8_t crc_byte0 = header.crc & 0xFF;
-                uint8_t crc_byte1 = (header.crc >> 8) & 0xFF;
-                uint8_t crc_byte2 = (header.crc >> 16) & 0xFF;
-                uint8_t crc_byte3 = (header.crc >> 24) & 0xFF;
-
-                if (crc_byte0 == crc_byte1 && crc_byte1 == crc_byte2 && crc_byte2 == crc_byte3) {
-                    looks_like_payload_data = true;
-                }
-
-                // Check counter for repeated byte pattern
-                uint8_t counter_byte0 = header.counter & 0xFF;
-                uint8_t counter_byte1 = (header.counter >> 8) & 0xFF;
-                uint8_t counter_byte2 = (header.counter >> 16) & 0xFF;
-                uint8_t counter_byte3 = (header.counter >> 24) & 0xFF;
-
-                if (counter_byte0 == counter_byte1 && counter_byte1 == counter_byte2 && counter_byte2 == counter_byte3) {
-                    looks_like_payload_data = true;
-                }
-
-                // Check freshness for repeated byte pattern
-                uint8_t freshness_byte0 = header.freshness_value & 0xFF;
-                uint8_t freshness_byte1 = (header.freshness_value >> 8) & 0xFF;
-
-                if (freshness_byte0 == freshness_byte1) {
-                    looks_like_payload_data = true;
-                }
-
-                if (header.data_id != 0 &&
-                    (header.crc != 0 || header.counter != 0 || header.freshness_value != 0) &&
-                    !looks_like_payload_data) {
-                    e2e_header_ = header;
-                    offset += e2e_header_size;
-                }
+                e2e_header_ = header;
+                offset += e2e_header_size;
+            } else {
+                return false;
             }
+        } else {
+            return false;
         }
     }
 
