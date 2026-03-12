@@ -90,8 +90,6 @@ Registry for managing E2E protection profiles.
 **Methods:**
 - `static E2EProfileRegistry& instance()` - Get singleton instance
 - `bool register_profile(E2EProfilePtr profile)` - Register a profile
-- `bool unregister_profile(uint32_t profile_id)` - Unregister a profile by ID; returns `false` if not found
-- `bool is_registered(uint32_t profile_id) const` - Check whether a profile is registered
 - `E2EProfile* get_profile(uint32_t profile_id)` - Get profile by ID
 - `E2EProfile* get_profile(const std::string& profile_name)` - Get profile by name
 - `E2EProfile* get_default_profile()` - Get default (basic) profile
@@ -123,5 +121,5 @@ E2E protection returns `Result` codes:
 
 ## See Also
 
-- [E2E Protection Architecture](../../docs/architecture/e2e_protection.md) -- Design and data flow
+- [E2E Protection Architecture](../architecture/e2e_protection.md) -- Design and data flow
 - [E2E Protection Examples](https://github.com/vtz/opensomeip/tree/main/examples/e2e_protection) -- Working code samples
