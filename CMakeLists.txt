@@ -63,17 +63,23 @@ elseif(SOMEIP_THREADX_LINUX_TESTS AND NOT WIN32)
     set(SOMEIP_USE_THREADX ON CACHE BOOL "" FORCE)
 endif()
 
-# Fetch RTOS kernels early — before add_subdirectory(src) — so their headers
-# are on the include path when the backend thread_impl.h is compiled into src/.
-if(SOMEIP_FREERTOS_LINUX_TESTS AND NOT WIN32)
+# Fetch RTOS kernels and lwIP early — before add_subdirectory(src) — so their
+# headers are on the include path when PAL *_impl.h files are compiled.
+
+# --- FreeRTOS ---
+if(SOMEIP_USE_FREERTOS)
     enable_language(C)
 
-    set(FREERTOS_PORT "GCC_POSIX" CACHE STRING "" FORCE)
+    if(SOMEIP_FREERTOS_LINUX_TESTS AND NOT WIN32)
+        set(FREERTOS_PORT "GCC_POSIX" CACHE STRING "" FORCE)
+    elseif(NOT DEFINED CACHE{FREERTOS_PORT})
+        set(FREERTOS_PORT "GCC_ARM_CM4F" CACHE STRING "FreeRTOS port (e.g. GCC_ARM_CM4F, GCC_ARM_CM7)")
+    endif()
     set(FREERTOS_HEAP "4" CACHE STRING "" FORCE)
 
     add_library(freertos_config INTERFACE)
     target_include_directories(freertos_config SYSTEM INTERFACE
-        ${CMAKE_SOURCE_DIR}/tests/freertos
+        ${PROJECT_SOURCE_DIR}/tests/freertos
     )
 
     FetchContent_Declare(freertos_kernel
@@ -83,18 +89,25 @@ if(SOMEIP_FREERTOS_LINUX_TESTS AND NOT WIN32)
     )
     FetchContent_MakeAvailable(freertos_kernel)
 
-    # Expose FreeRTOS kernel headers globally so thread_impl.h (<FreeRTOS.h>)
-    # and the port-specific portmacro.h resolve when src/ is compiled.
     include_directories(
         ${freertos_kernel_SOURCE_DIR}/include
-        ${freertos_kernel_SOURCE_DIR}/portable/ThirdParty/GCC/Posix
-        ${CMAKE_SOURCE_DIR}/tests/freertos  # FreeRTOSConfig.h
+        ${PROJECT_SOURCE_DIR}/tests/freertos
     )
+    if(SOMEIP_FREERTOS_LINUX_TESTS AND NOT WIN32)
+        include_directories(${freertos_kernel_SOURCE_DIR}/portable/ThirdParty/GCC/Posix)
+    endif()
 endif()
 
-if(SOMEIP_THREADX_LINUX_TESTS AND NOT WIN32)
-    set(THREADX_ARCH "linux" CACHE STRING "" FORCE)
-    set(THREADX_TOOLCHAIN "gnu" CACHE STRING "" FORCE)
+# --- ThreadX ---
+if(SOMEIP_USE_THREADX)
+    if(SOMEIP_THREADX_LINUX_TESTS AND NOT WIN32)
+        set(THREADX_ARCH "linux" CACHE STRING "" FORCE)
+    elseif(NOT DEFINED CACHE{THREADX_ARCH})
+        set(THREADX_ARCH "cortex_m4" CACHE STRING "ThreadX architecture (e.g. cortex_m4, cortex_m7)")
+    endif()
+    if(NOT DEFINED CACHE{THREADX_TOOLCHAIN})
+        set(THREADX_TOOLCHAIN "gnu" CACHE STRING "ThreadX toolchain")
+    endif()
 
     FetchContent_Declare(threadx
         GIT_REPOSITORY https://github.com/eclipse-threadx/threadx.git
@@ -103,11 +116,34 @@ if(SOMEIP_THREADX_LINUX_TESTS AND NOT WIN32)
     )
     FetchContent_MakeAvailable(threadx)
 
-    # Expose ThreadX kernel headers globally so thread_impl.h (<tx_api.h>)
-    # resolves when src/ object targets are compiled.
     include_directories(
         ${threadx_SOURCE_DIR}/common/inc
         ${threadx_SOURCE_DIR}/ports/${THREADX_ARCH}/${THREADX_TOOLCHAIN}/inc
+    )
+endif()
+
+# --- lwIP (headers only — we don't build lwIP itself, the user's BSP does) ---
+# When SOMEIP_USE_LWIP is ON, fetch lwIP headers so net_impl.h and
+# byteorder_impl.h can compile.  Users who already have lwIP in their project
+# can point FETCHCONTENT_SOURCE_DIR_LWIP to their own copy.
+if(SOMEIP_USE_LWIP)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+
+    FetchContent_Declare(lwip
+        GIT_REPOSITORY https://github.com/lwip-tcpip/lwip.git
+        GIT_TAG        STABLE-2_2_0_RELEASE
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_GetProperties(lwip)
+    if(NOT lwip_POPULATED)
+        FetchContent_Populate(lwip)
+    endif()
+
+    include_directories(
+        ${lwip_SOURCE_DIR}/src/include
+        ${PROJECT_SOURCE_DIR}/cmake/config/lwip
     )
 endif()
 
@@ -179,6 +215,7 @@ endif()
 
 if(SOMEIP_USE_LWIP)
     include_directories(include/platform/lwip)
+    add_compile_definitions(SOMEIP_NET_LWIP)
 elseif(WIN32)
     # win32 net/byteorder already included above
 else()
@@ -206,14 +243,14 @@ find_program(CLANG_FORMAT_EXE clang-format
 # Use 'make tidy' target for manual static analysis instead
 # if(CLANG_TIDY_EXE)
 #     set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY_EXE}
-#         --config-file=${CMAKE_SOURCE_DIR}/.clang-tidy
+#         --config-file=${PROJECT_SOURCE_DIR}/.clang-tidy
 #         --header-filter=.*)
 # endif()
 
 # Add custom targets for code quality
 if(CLANG_FORMAT_EXE)
     add_custom_target(format
-        COMMAND find ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/examples ${CMAKE_SOURCE_DIR}/tests
+        COMMAND find ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/examples ${PROJECT_SOURCE_DIR}/tests
                -name "*.cpp" -o -name "*.h" |
                xargs ${CLANG_FORMAT_EXE} -i
         COMMENT "Formatting code with clang-format"
@@ -224,20 +261,20 @@ if(CLANG_TIDY_EXE)
     # Check if test targets exist (indicates successful googletest setup)
     if(TARGET test_message)
         add_custom_target(tidy
-            COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_clang_tidy.sh
+            COMMAND ${PROJECT_SOURCE_DIR}/scripts/run_clang_tidy.sh
                     ${CLANG_TIDY_EXE}
-                    ${CMAKE_SOURCE_DIR}/.clang-tidy
+                    ${PROJECT_SOURCE_DIR}/.clang-tidy
                     ${CMAKE_BINARY_DIR}
-                    ${CMAKE_SOURCE_DIR}
+                    ${PROJECT_SOURCE_DIR}
             COMMENT "Running clang-tidy static analysis on all source files"
         )
     else()
         add_custom_target(tidy
-            COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_clang_tidy.sh
+            COMMAND ${PROJECT_SOURCE_DIR}/scripts/run_clang_tidy.sh
                     ${CLANG_TIDY_EXE}
-                    ${CMAKE_SOURCE_DIR}/.clang-tidy
+                    ${PROJECT_SOURCE_DIR}/.clang-tidy
                     ${CMAKE_BINARY_DIR}
-                    ${CMAKE_SOURCE_DIR}
+                    ${PROJECT_SOURCE_DIR}
             COMMENT "Running clang-tidy static analysis on all source files"
         )
         message(STATUS "googletest not available - excluding test files from clang-tidy analysis")
@@ -253,20 +290,12 @@ endif()
 # Subdirectories
 add_subdirectory(src)
 
-# FreeRTOS POSIX port: link fetched kernel and build runtime tests.
-# (kernel is fetched early, before add_subdirectory(src), so FreeRTOS.h is
-#  available when the freertos thread_impl.h is compiled into src/)
+# RTOS runtime tests (linux/POSIX port only).
 if(SOMEIP_FREERTOS_LINUX_TESTS AND NOT WIN32)
-    target_link_libraries(someip-core PUBLIC freertos_kernel)
     enable_testing()
     add_subdirectory(tests/freertos)
 endif()
-
-# ThreadX linux port: link fetched kernel and build runtime tests.
-# (kernel is fetched early, before add_subdirectory(src), so tx_api.h is
-#  available when the threadx thread_impl.h is compiled into src/)
 if(SOMEIP_THREADX_LINUX_TESTS AND NOT WIN32)
-    target_link_libraries(someip-core PUBLIC threadx)
     enable_testing()
     add_subdirectory(tests/threadx)
 endif()
