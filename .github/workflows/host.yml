@@ -1,20 +1,8 @@
 name: Host Build & Test
 
 on:
-  push:
-    branches: ["main"]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.cursor/**'
-  pull_request:
-    branches: ["main"]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.cursor/**'
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -124,7 +112,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results-fedora42-${{ matrix.c_compiler }}
+          name: test-results-host-fedora42-${{ matrix.c_compiler }}
           path: build/junit_results.xml
           retention-days: 14
 
@@ -175,7 +163,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-report
+          name: coverage-report-host
           path: |
             coverage.xml
             coverage.html
@@ -186,7 +174,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results-coverage
+          name: test-results-host-coverage
           path: build/junit_results.xml
           retention-days: 14
 
@@ -204,7 +192,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-summary
+          name: coverage-summary-host
           path: code-coverage-results.md
           retention-days: 14
 
@@ -230,7 +218,7 @@ jobs:
       - name: Download test results
         uses: actions/download-artifact@v4
         with:
-          pattern: test-results-*
+          pattern: test-results-host-*
 
       - name: Publish Test Results
         uses: EnricoMi/publish-unit-test-result-action@c950f6fb443cb5af20a377fd0dfaa78838901040 # v2
