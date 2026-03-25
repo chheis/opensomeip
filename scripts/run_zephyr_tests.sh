@@ -35,7 +35,8 @@ run_test() {
     printf "\n[%d] Building %s for %s...\n" "$TOTAL" "$app_name" "$board"
 
     if west build -b "$board" "$app_dir" -d "$build_dir" --pristine auto -- \
-        -DBOARD_ROOT="$ZEPHYR_DIR" 2>&1; then
+        -DBOARD_ROOT="$ZEPHYR_DIR" \
+        -DSOC_ROOT="$ZEPHYR_DIR" 2>&1; then
         echo "  Build: OK"
     else
         echo "  Build: FAILED"
@@ -54,6 +55,15 @@ run_test() {
             PASSED=$((PASSED + 1))
         else
             echo "  Runtime: FAILED (exit code $?)"
+            FAILED=$((FAILED + 1))
+            return
+        fi
+    elif [ "$board" = "s32k388_renode" ]; then
+        printf "  Running on Renode...\n"
+        if "$SCRIPT_DIR/run_renode_test.sh" "$app_name" --timeout 60; then
+            PASSED=$((PASSED + 1))
+        else
+            echo "  Renode: FAILED"
             FAILED=$((FAILED + 1))
             return
         fi
@@ -84,8 +94,9 @@ case "$TARGET" in
         run_test hello_s32k   "$ZEPHYR_DIR/samples/hello_s32k"   mr_canhubk3
         ;;
     s32k388_renode)
-        run_test test_core    "$ZEPHYR_DIR/tests/test_core"      s32k388_renode
-        run_test hello_s32k   "$ZEPHYR_DIR/samples/hello_s32k"   s32k388_renode
+        run_test test_core      "$ZEPHYR_DIR/tests/test_core"      s32k388_renode
+        run_test test_transport "$ZEPHYR_DIR/tests/test_transport" s32k388_renode
+        run_test hello_s32k     "$ZEPHYR_DIR/samples/hello_s32k"   s32k388_renode
         ;;
     *)
         echo "ERROR: Unknown target '$TARGET'"

@@ -96,6 +96,17 @@
       }
     },
     {
+      "name": "freertos-cortexm4-renode",
+      "displayName": "FreeRTOS Cortex-M4 (Renode STM32F4)",
+      "description": "Cross-compile FreeRTOS tests for ARM Cortex-M4, runnable on Renode STM32F407 simulator",
+      "inherits": "freertos-cortexm4",
+      "cacheVariables": {
+        "SOMEIP_FREERTOS_RENODE_TESTS": "ON",
+        "FREERTOS_PORT": "GCC_ARM_CM3",
+        "ARM_FLOAT_ABI": "soft"
+      }
+    },
+    {
       "name": "threadx-compile-check",
       "displayName": "ThreadX Compile Check",
       "description": "Host-compiler build with real ThreadX kernel (PAL threading verification). CMAKE_POLICY_VERSION_MINIMUM works around CMake 3.27+ policy enforcement against ThreadX's legacy CMakeLists.txt.",
@@ -133,6 +144,16 @@
         "ARM_FLOAT_ABI": "hard",
         "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
       }
+    },
+    {
+      "name": "threadx-cortexm4-renode",
+      "displayName": "ThreadX Cortex-M4 (Renode STM32F4)",
+      "description": "Cross-compile ThreadX tests for ARM Cortex-M4, runnable on Renode STM32F407 simulator. CMAKE_POLICY_VERSION_MINIMUM=3.5 works around ThreadX's legacy CMakeLists.txt.",
+      "inherits": "threadx-cortexm4",
+      "cacheVariables": {
+        "SOMEIP_THREADX_RENODE_TESTS": "ON",
+        "ARM_FLOAT_ABI": "soft"
+      }
     }
   ],
   "buildPresets": [
@@ -169,6 +190,10 @@
       "configurePreset": "freertos-cortexm4"
     },
     {
+      "name": "freertos-cortexm4-renode",
+      "configurePreset": "freertos-cortexm4-renode"
+    },
+    {
       "name": "threadx-compile-check",
       "configurePreset": "threadx-compile-check"
     },
@@ -179,6 +204,10 @@
     {
       "name": "threadx-cortexm4",
       "configurePreset": "threadx-cortexm4"
+    },
+    {
+      "name": "threadx-cortexm4-renode",
+      "configurePreset": "threadx-cortexm4-renode"
     }
   ],
   "testPresets": [

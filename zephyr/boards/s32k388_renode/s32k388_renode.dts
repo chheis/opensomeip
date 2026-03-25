@@ -2,8 +2,10 @@
  * Device tree for NXP S32K388 Renode simulation target.
  *
  * Minimal description: single Cortex-M7 core, 512KB SRAM, 8MB flash,
- * GMAC Ethernet, LPUART console.  Addresses match the Renode platform
- * file `nxp-s32k388.repl`.
+ * SBSA UART console.  Uses an ARM SBSA UART (simplified PL011 subset)
+ * so that the Zephyr serial driver does not depend on the NXP HAL or
+ * clock control.  Memory addresses match the custom Renode platform
+ * file `zephyr/renode/s32k388_renode.repl`.
  *
  * Copyright (c) 2025 Vinicius Tadeu Zein
  * SPDX-License-Identifier: Apache-2.0
@@ -20,8 +22,8 @@
     #size-cells = <1>;
 
     chosen {
-        zephyr,console = &lpuart0;
-        zephyr,shell-uart = &lpuart0;
+        zephyr,console = &uart0;
+        zephyr,shell-uart = &uart0;
         zephyr,sram = &sram0;
         zephyr,flash = &flash0;
     };
@@ -54,17 +56,15 @@
         compatible = "simple-bus";
         ranges;
 
-        lpuart0: serial@40328000 {
-            compatible = "nxp,kinetis-lpuart";
-            reg = <0x40328000 0x1000>;
-            status = "okay";
-            current-speed = <115200>;
+        nvic: interrupt-controller@e000e100 {
+            arm,num-irq-priority-bits = <4>;
         };
 
-        gmac0: ethernet@40480000 {
-            compatible = "snps,dwceth";
-            reg = <0x40480000 0x2000>;
+        uart0: serial@40090000 {
+            compatible = "arm,sbsa-uart";
+            reg = <0x40090000 0x1000>;
             status = "okay";
+            current-speed = <115200>;
         };
     };
 };

@@ -1,0 +1,38 @@
+################################################################################
+# Renode headless test script for NXP S32K388 + SOME/IP stack
+#
+# Designed for automated CI usage: captures UART output to a file for parsing.
+#
+# Variables (set before including):
+#   $firmware  - path to the Zephyr ELF (e.g. @build/zephyr/zephyr.elf)
+#   $logfile   - path to write UART output (e.g. @/tmp/uart.log)
+#   $platform  - path to the .repl platform file
+#
+# Usage:
+#   renode --disable-xwt --plain \
+#     -e '$firmware=@path/to/zephyr.elf; $logfile=@/tmp/uart.log; $platform=@path/to/s32k388_renode.repl; i @s32k388_test.resc; start'
+#
+# Copyright (c) 2025 Vinicius Tadeu Zein
+# SPDX-License-Identifier: Apache-2.0
+################################################################################
+
+using sysbus
+
+mach create "s32k388"
+machine LoadPlatformDescription $platform
+
+# Capture UART output to file for automated result parsing
+sysbus.uart0 CreateFileBackend $logfile true
+
+# Enable PL011 UART (UARTCR = UARTEN | TXE | RXE = 0x0301).
+# The SBSA UART driver doesn't initialise hardware registers, so
+# the PL011 model starts with UARTEN=0 and rejects writes.
+sysbus WriteDoubleWord 0x40090030 0x0301
+
+macro reset
+"""
+    sysbus LoadELF $firmware
+"""
+runMacro $reset
+
+echo "S32K388 headless test -- starting simulation."

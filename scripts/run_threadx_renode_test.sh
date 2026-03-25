@@ -5,56 +5,35 @@
 # SPDX-License-Identifier: Apache-2.0
 ################################################################################
 #
-# Build and run a Zephyr app on the S32K388 Renode simulator with automated
-# UART log capture, result assertion, and optional JUnit XML output.
+# Build and run ThreadX SOME/IP tests on Renode (STM32F407 Cortex-M4).
 #
 # Usage:
-#   ./scripts/run_renode_test.sh [APP] [OPTIONS]
-#
-# Apps:
-#   test_core      Run core unit tests (default)
-#   test_transport  Run transport tests
-#   hello_s32k     Run hello sample
-#   someip_echo    Run echo sample
-#   renode_demo    Run Renode demo sample
+#   ./scripts/run_threadx_renode_test.sh [OPTIONS]
 #
 # Options:
 #   --timeout N         Simulation timeout in seconds (default: 60)
 #   --junit-output PATH Write JUnit XML to this path
 #   --build-only        Only build, do not run Renode
+#   --skip-build        Skip build, only run Renode (ELF must exist)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-ZEPHYR_DIR="$PROJECT_DIR/zephyr"
-BUILD_BASE="$PROJECT_DIR/build/zephyr"
-RENODE_SCRIPT="$ZEPHYR_DIR/renode/s32k388_test.resc"
-RENODE_PLATFORM="$ZEPHYR_DIR/renode/s32k388_renode.repl"
+RENODE_SCRIPT="$PROJECT_DIR/renode/stm32f4_test.resc"
+BUILD_DIR="$PROJECT_DIR/build/threadx-cortexm4-renode"
 
-APP="test_core"
 TIMEOUT=60
 JUNIT_OUTPUT=""
 BUILD_ONLY=false
+SKIP_BUILD=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --timeout)
-            TIMEOUT="$2"
-            shift 2
-            ;;
-        --junit-output)
-            JUNIT_OUTPUT="$2"
-            shift 2
-            ;;
-        --build-only)
-            BUILD_ONLY=true
-            shift
-            ;;
-        test_core|test_transport|hello_s32k|someip_echo|renode_demo)
-            APP="$1"
-            shift
-            ;;
+        --timeout)     TIMEOUT="$2"; shift 2 ;;
+        --junit-output) JUNIT_OUTPUT="$2"; shift 2 ;;
+        --build-only)  BUILD_ONLY=true; shift ;;
+        --skip-build)  SKIP_BUILD=true; shift ;;
         *)
             echo "ERROR: Unknown argument '$1'"
             exit 1
@@ -62,37 +41,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-case "$APP" in
-    test_core)      APP_DIR="$ZEPHYR_DIR/tests/test_core" ;;
-    test_transport) APP_DIR="$ZEPHYR_DIR/tests/test_transport" ;;
-    hello_s32k)     APP_DIR="$ZEPHYR_DIR/samples/hello_s32k" ;;
-    someip_echo)    APP_DIR="$ZEPHYR_DIR/samples/someip_echo" ;;
-    renode_demo)    APP_DIR="$ZEPHYR_DIR/samples/renode_demo" ;;
-    *)
-        echo "ERROR: Unknown app '$APP'"
-        exit 1
-        ;;
-esac
+ELF_PATH="$BUILD_DIR/renode/test_threadx_renode.elf"
 
-BOARD="s32k388_renode"
-BUILD_DIR="$BUILD_BASE/${BOARD}_${APP}"
-
-if [ -z "${ZEPHYR_BASE:-}" ]; then
-    echo "ERROR: ZEPHYR_BASE not set."
-    exit 1
-fi
-
-echo "=== Renode Test: $APP ==="
-echo "  Board:   $BOARD"
+echo "=== ThreadX Renode Test (STM32F407 Cortex-M4) ==="
 echo "  Timeout: ${TIMEOUT}s"
 
 # --- Build ---
-echo "  Building..."
-west build -b "$BOARD" "$APP_DIR" -d "$BUILD_DIR" --pristine auto -- \
-    -DBOARD_ROOT="$ZEPHYR_DIR" \
-    -DSOC_ROOT="$ZEPHYR_DIR" 2>&1
-
-ELF_PATH="$BUILD_DIR/zephyr/zephyr.elf"
+if [ "$SKIP_BUILD" = false ]; then
+    echo "  Building with preset threadx-cortexm4-renode..."
+    cmake --preset threadx-cortexm4-renode -S "$PROJECT_DIR" 2>&1
+    cmake --build "$BUILD_DIR" -j"$(nproc)" 2>&1
+fi
 
 if [ ! -f "$ELF_PATH" ]; then
     echo "ERROR: ELF not found: $ELF_PATH"
@@ -107,14 +66,14 @@ if [ "$BUILD_ONLY" = true ]; then
 fi
 
 # --- Run Renode ---
-LOGFILE=$(mktemp /tmp/renode_uart_XXXXXX.log)
+LOGFILE=$(mktemp /tmp/renode_threadx_XXXXXX.log)
 trap 'rm -f "$LOGFILE"' EXIT
 
 echo "  Starting Renode (headless)..."
 echo "  UART log: $LOGFILE"
 
 timeout --preserve-status "$TIMEOUT" renode --disable-xwt --plain \
-    -e "\$firmware=@$ELF_PATH; \$logfile=@$LOGFILE; \$platform=@$RENODE_PLATFORM; i @$RENODE_SCRIPT; start" \
+    -e "\$firmware=@$ELF_PATH; \$logfile=@$LOGFILE; i @$RENODE_SCRIPT; start" \
     2>&1 || true
 
 # --- Parse UART output ---
@@ -151,10 +110,10 @@ fi
 # --- JUnit XML ---
 if [ -n "$JUNIT_OUTPUT" ] && [ -f "$LOGFILE" ]; then
     echo "  Generating JUnit XML: $JUNIT_OUTPUT"
-    python3 "$SCRIPT_DIR/zephyr_to_junit.py" "$LOGFILE" "${APP}_renode" "$JUNIT_OUTPUT" || echo "  WARNING: JUnit XML generation failed"
+    python3 "$SCRIPT_DIR/zephyr_to_junit.py" "$LOGFILE" "threadx_renode" "$JUNIT_OUTPUT" || echo "  WARNING: JUnit XML generation failed"
 fi
 
-echo "=== Renode test complete ==="
+echo "=== ThreadX Renode test complete ==="
 
 if [ "$FAILED" -ne 0 ]; then
     exit 1
