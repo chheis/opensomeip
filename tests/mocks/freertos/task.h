@@ -16,6 +16,10 @@ struct MockTaskHandle {};
 typedef MockTaskHandle* TaskHandle_t;
 typedef void (*TaskFunction_t)(void*);
 
+namespace mock_detail {
+inline MockTaskHandle task_sentinel;
+} // namespace mock_detail
+
 inline BaseType_t xTaskCreate(
         TaskFunction_t fn,
         const char* /*name*/,
@@ -24,22 +28,14 @@ inline BaseType_t xTaskCreate(
         UBaseType_t /*priority*/,
         TaskHandle_t* handle_out)
 {
-    MockTaskHandle* h = nullptr;
-    try {
-        h = new MockTaskHandle();
-    } catch (const std::bad_alloc&) {
-        return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
-    }
-
     std::thread t([fn, param]() { fn(param); });
     t.detach();
 
-    if (handle_out) *handle_out = h;
+    if (handle_out) *handle_out = &mock_detail::task_sentinel;
     return pdPASS;
 }
 
-inline void vTaskDelete(TaskHandle_t handle) {
-    delete handle;
+inline void vTaskDelete(TaskHandle_t /*handle*/) {
 }
 
 inline void vTaskDelay(TickType_t ticks) {
