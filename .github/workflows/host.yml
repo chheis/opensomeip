@@ -60,7 +60,11 @@ jobs:
 
       - name: Test
         working-directory: ${{ steps.strings.outputs.build-output-dir }}
-        run: ctest --build-config ${{ matrix.build_type }} --output-on-failure --timeout 30 --no-tests=error --output-junit junit_results.xml
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/gtest_results"
+          export GTEST_OUTPUT="xml:$GITHUB_WORKSPACE/gtest_results/"
+          ctest --build-config ${{ matrix.build_type }} --output-on-failure --timeout 30 --no-tests=error --output-junit junit_results.xml
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -68,6 +72,14 @@ jobs:
         with:
           name: test-results-host-${{ matrix.os }}-${{ matrix.c_compiler }}
           path: ${{ steps.strings.outputs.build-output-dir }}/junit_results.xml
+          retention-days: 14
+
+      - name: Upload GTest detailed results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gtest-results-host-${{ matrix.os }}-${{ matrix.c_compiler }}
+          path: ${{ github.workspace }}/gtest_results/
           retention-days: 14
 
   build-fedora:
@@ -106,7 +118,10 @@ jobs:
 
       - name: Test
         working-directory: build
-        run: ctest --build-config Release --output-on-failure --timeout 30 --no-tests=error --output-junit junit_results.xml
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/gtest_results"
+          export GTEST_OUTPUT="xml:$GITHUB_WORKSPACE/gtest_results/"
+          ctest --build-config Release --output-on-failure --timeout 30 --no-tests=error --output-junit junit_results.xml
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -114,6 +129,14 @@ jobs:
         with:
           name: test-results-host-fedora42-${{ matrix.c_compiler }}
           path: build/junit_results.xml
+          retention-days: 14
+
+      - name: Upload GTest detailed results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gtest-results-host-fedora42-${{ matrix.c_compiler }}
+          path: ${{ github.workspace }}/gtest_results/
           retention-days: 14
 
   coverage:
@@ -146,7 +169,10 @@ jobs:
 
       - name: Run tests
         working-directory: build
-        run: ctest --output-on-failure --timeout 30 --no-tests=error --output-junit junit_results.xml
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/gtest_results"
+          export GTEST_OUTPUT="xml:$GITHUB_WORKSPACE/gtest_results/"
+          ctest --output-on-failure --timeout 30 --no-tests=error --output-junit junit_results.xml
 
       - name: Generate coverage report
         run: |
@@ -176,6 +202,14 @@ jobs:
         with:
           name: test-results-host-coverage
           path: build/junit_results.xml
+          retention-days: 14
+
+      - name: Upload GTest detailed results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gtest-results-host-coverage
+          path: ${{ github.workspace }}/gtest_results/
           retention-days: 14
 
       - name: Code Coverage Summary
@@ -256,26 +290,69 @@ jobs:
     permissions:
       checks: write
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download test results
+      - name: Download GTest detailed results
         uses: actions/download-artifact@v4
         with:
-          pattern: test-results-host-*
+          pattern: gtest-results-host-*
+          path: gtest-downloads
 
       - name: Publish Test Results
         uses: EnricoMi/publish-unit-test-result-action@c950f6fb443cb5af20a377fd0dfaa78838901040 # v2
         with:
-          files: "**/junit_results.xml"
+          files: "gtest-downloads/**/*.xml"
           check_name: "Host Test Results"
           comment_mode: "off"
 
+      - name: Tag GTest XMLs with build variant
+        if: always()
+        run: |
+          for dir in gtest-downloads/gtest-results-host-*/; do
+            variant=$(basename "$dir" | sed 's/^gtest-results-host-//')
+            for xml in "$dir"*.xml; do
+              [ -f "$xml" ] && sed -i \
+                -e "s/<testsuite name=\"/<testsuite name=\"[${variant}] /g" \
+                -e "s/classname=\"/classname=\"[${variant}] /g" "$xml"
+            done
+          done
+
+      - name: Convert GTest XML to CTRF
+        if: always()
+        run: npx junit-to-ctrf@0.0.14 "gtest-downloads/**/*.xml" -o ctrf/host-report.json -t host
+
       - name: Detailed Test Report
-        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
+        uses: ctrf-io/github-test-reporter@31e2a2735dd4641c65c2f49eb07e93ce8ec37fff # v1
+        if: always()
         with:
-          name: "Host Test Report"
-          path: "**/junit_results.xml"
-          reporter: java-junit
-          list-tests: 'all'
-          list-suites: 'all'
-          use-actions-summary: 'true'
+          report-path: 'ctrf/host-report.json'
+          title: 'Host Test Report'
+          summary-report: true
+          failed-report: true
+          suite-list-report: true
+          test-report: true
+          use-suite-name: true
+
+      - name: Create Host Test Check Run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          REPORT="ctrf/host-report.json"
+          if [ ! -f "$REPORT" ]; then echo "No CTRF report found"; exit 0; fi
+          TOTAL=$(jq '.results.summary.tests' "$REPORT")
+          PASSED=$(jq '.results.summary.passed' "$REPORT")
+          FAILED=$(jq '.results.summary.failed' "$REPORT")
+          SKIPPED=$(jq '.results.summary.skipped' "$REPORT")
+          CONCLUSION="success"; [ "$FAILED" -gt 0 ] && CONCLUSION="failure"
+          BODY="## Host Test Report"$'\n\n'"| Tests | Passed | Failed | Skipped |"$'\n'"|-|-|-|-|"$'\n'"| $TOTAL | $PASSED | $FAILED | $SKIPPED |"
+          if [ "$FAILED" -gt 0 ]; then
+            FAILS=$(jq -r '[.results.tests[] | select(.status=="failed")] | .[0:50] | .[] | "| \(.suite // "-") | \(.name) |"' "$REPORT")
+            BODY="$BODY"$'\n\n'"### Failed Tests"$'\n'"| Suite | Test |"$'\n'"|-|-|"$'\n'"$FAILS"
+          fi
+          gh api repos/${{ github.repository }}/check-runs \
+            -f "head_sha=${SHA}" \
+            -f "name=Host Detailed Test Report" \
+            -f "status=completed" \
+            -f "conclusion=${CONCLUSION}" \
+            -f "output[title]=Host: ${PASSED}/${TOTAL} passed" \
+            -f "output[summary]=${BODY}"
