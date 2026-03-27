@@ -28,89 +28,54 @@ from pathlib import Path
 
 from someip_test_framework import (
     TestProcess, TestScenario, SomeIpEndpoint,
-    someip_test_scenario, get_build_bin_path
+    someip_test_scenario,
 )
 
 
 @pytest.mark.system
 @pytest.mark.slow
-def test_service_discovery_and_rpc(sd_server_executable, sd_client_executable,
-                                  rpc_server_executable, rpc_client_executable):
+def test_service_discovery_and_rpc(sd_server_executable, sd_client_executable):
     """
-    System test: SD server offers calculator service, SD client discovers it,
-    then performs RPC calls to the calculator.
+    System test: SD server offers service 0x1000 via Service Discovery,
+    SD client discovers it, sends SOME/IP requests, and verifies responses.
     """
-    build_bin = get_build_bin_path()
+    server_proc = TestProcess(sd_server_executable)
+    client_proc = TestProcess(sd_client_executable)
 
-    # Create test scenario
-    scenario = TestScenario(
-        name="full_stack_test",
-        description="Complete SD + RPC integration test",
-        setup_time=3.0,
-        test_timeout=60.0
-    )
-
-    # Start SD server (offers calculator service)
-    scenario.add_process(sd_server_executable)
-
-    # Start actual RPC calculator server
-    scenario.add_process(rpc_server_executable, "8888")  # RPC server on port 8888
-
-    # Start SD client (discovers and connects to calculator)
-    scenario.add_process(sd_client_executable)
-
-    # Run the scenario
-    processes_started = []
     try:
-        # Start processes
-        for process in scenario.processes:
-            print(f"Starting: {process.executable} {' '.join(process.args)}")
-            if process.start():
-                processes_started.append(process)
-            else:
-                pytest.fail(f"Failed to start process: {process.executable}")
+        assert server_proc.start(), "Failed to start sd_demo_server"
+        time.sleep(2.0)
+        assert server_proc.is_running, "sd_demo_server died during startup"
 
-        # Wait for services to start up
-        time.sleep(5.0)
+        assert client_proc.start(), "Failed to start sd_demo_client"
 
-        # Check that all processes are still running
-        for process in processes_started:
-            assert process.is_running, f"Process died: {process.executable}"
+        # sd_demo_client discovers the service, sends 3 requests, and exits
+        deadline = time.time() + 30.0
+        while client_proc.is_running and time.time() < deadline:
+            time.sleep(0.5)
 
-        # Wait for SD discovery and RPC operations to complete
-        time.sleep(10.0)
+        assert not client_proc.is_running, "sd_demo_client did not finish in time"
 
-        # Verify processes completed successfully
-        for process in processes_started:
-            if process.is_running:
-                # Try graceful shutdown
-                process.stop(timeout=5.0)
+        client_rc = client_proc.returncode
+        client_out = client_proc.stdout or ""
+        print(f"sd_demo_client exited with code {client_rc}")
+        print(f"STDOUT: {client_out}")
+        if client_proc.stderr:
+            print(f"STDERR: {client_proc.stderr}")
 
-        # Check return codes
-        for process in processes_started:
-            returncode = process.returncode
-            stdout = process.stdout or ""
-            stderr = process.stderr or ""
+        assert client_rc == 0, (
+            f"sd_demo_client failed (exit {client_rc}): {client_out}"
+        )
+        assert "3/3 round-trips OK" in client_out, (
+            f"sd_demo_client did not complete all round-trips: {client_out}"
+        )
 
-            print(f"Process {process.executable} exited with code {returncode}")
-            if stdout:
-                print(f"STDOUT: {stdout[:500]}...")
-            if stderr:
-                print(f"STDERR: {stderr[:500]}...")
-
-            # SD and RPC processes should exit cleanly
-            assert returncode == 0, f"Process {process.executable} failed with code {returncode}"
-
-        print("✅ Full stack SD + RPC test completed successfully")
-
-    except Exception as e:
-        # Clean up on failure
-        for process in reversed(processes_started):
+    finally:
+        for p in (client_proc, server_proc):
             try:
-                process.stop(timeout=2.0)
-            except:
+                p.stop(timeout=3.0)
+            except Exception:
                 pass
-        raise
 
 
 @pytest.mark.system
@@ -244,109 +209,131 @@ def test_transport_protocol_segmentation(tp_example_executable):
 @pytest.mark.system
 @pytest.mark.performance
 @pytest.mark.slow
-def test_echo_performance(echo_server_executable, echo_client_executable, tmp_path):
+def test_echo_performance(echo_server_executable, available_port):
     """
-    Performance test: Measure echo server/client throughput and latency.
-    Runs multiple clients against a single server.
+    Performance test: Measure echo server throughput and latency by sending
+    SOME/IP REQUEST messages over UDP and timing the RESPONSE round-trips.
     """
+    import socket
+    import struct
     import threading
     import queue
 
-    num_clients = 5
-    messages_per_client = 100
-    message_size = 1024  # 1KB messages
+    HELLO_SERVICE_ID = 0x1000
+    SAY_HELLO_METHOD_ID = 0x0001
+    MSG_TYPE_RESPONSE = 0x80
 
-    results_queue = queue.Queue()
+    num_clients = 3
+    messages_per_client = 50
 
-    def client_worker(client_id: int):
-        """Worker function for each client thread"""
+    def build_request(payload: bytes, client_id: int, session_id: int) -> bytes:
+        return struct.pack(
+            ">HHIHHBBBB",
+            HELLO_SERVICE_ID, SAY_HELLO_METHOD_ID,
+            8 + len(payload), client_id, session_id,
+            0x01, 0x01, 0x00, 0x00,
+        ) + payload
+
+    def _is_valid_response(data: bytes, expected_cid: int, expected_sid: int) -> bool:
+        if len(data) < 16:
+            return False
+        svc, method, length, cid, sid, _pv, _iv, mt, rc = struct.unpack(
+            ">HHIHHBBBB", data[:16],
+        )
+        return (len(data) == 8 + length
+                and svc == HELLO_SERVICE_ID and method == SAY_HELLO_METHOD_ID
+                and mt == MSG_TYPE_RESPONSE and rc == 0x00
+                and cid == expected_cid and sid == expected_sid)
+
+    results_queue: queue.Queue = queue.Queue()
+
+    WORKER_BUDGET = 25.0
+
+    def client_worker(client_id: int, port: int):
         try:
-            # Start client process
-            client_process = TestProcess(
-                echo_client_executable,
-                [str(9999)],  # Server port
-                cwd=str(tmp_path)
-            )
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(("127.0.0.1", 0))
 
-            start_time = time.time()
+            cid = 0xA000 + client_id
             success_count = 0
+            start_time = time.time()
 
-            # Note: This is a simplified performance test.
-            # In a real implementation, you'd modify the echo client
-            # to accept parameters for message count and size.
+            for seq in range(messages_per_client):
+                remaining = WORKER_BUDGET - (time.time() - start_time)
+                if remaining <= 0:
+                    break
+                sock.settimeout(min(0.5, remaining))
 
-            if client_process.start():
-                # Wait for client to complete (simplified)
-                time.sleep(2.0)  # Assume client runs for 2 seconds
+                sid = seq + 1
+                payload = f"perf-{client_id}-{seq}".encode()
+                msg = build_request(payload, cid, sid)
+                sock.sendto(msg, ("127.0.0.1", port))
+                try:
+                    data, _ = sock.recvfrom(65536)
+                    if _is_valid_response(data, cid, sid):
+                        success_count += 1
+                except socket.timeout:
+                    pass
 
-                client_process.stop()
-                end_time = time.time()
-
-                if client_process.returncode == 0:
-                    success_count = messages_per_client  # Assume all succeeded
+            elapsed = time.time() - start_time
+            sock.close()
 
             results_queue.put({
-                'client_id': client_id,
-                'duration': end_time - start_time,
-                'messages': success_count
+                "client_id": client_id,
+                "duration": elapsed,
+                "messages": success_count,
             })
-
         except Exception as e:
-            results_queue.put({
-                'client_id': client_id,
-                'error': str(e)
-            })
+            results_queue.put({"client_id": client_id, "error": str(e)})
 
-    # Start server
-    server_process = TestProcess(echo_server_executable, ["9999"])
+    server_process = TestProcess(
+        echo_server_executable,
+        env={**os.environ, "HELLO_BIND_HOST": "127.0.0.1",
+             "HELLO_BIND_PORT": str(available_port)},
+    )
     assert server_process.start(), "Failed to start echo server"
 
     try:
-        # Wait for server to start
         time.sleep(1.0)
 
-        # Start client threads
-        threads = []
-        for i in range(num_clients):
-            thread = threading.Thread(target=client_worker, args=(i,))
-            threads.append(thread)
-            thread.start()
+        threads = [
+            threading.Thread(target=client_worker, args=(i, available_port))
+            for i in range(num_clients)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30.0)
 
-        # Wait for all clients to complete
-        for thread in threads:
-            thread.join(timeout=30.0)
-
-        # Collect results
         total_messages = 0
-        total_time = 0.0
+        wall_time = 0.0
+        total_client_time = 0.0
         errors = []
 
         for _ in range(num_clients):
-            result = results_queue.get(timeout=1.0)
-            if 'error' in result:
-                errors.append(result['error'])
+            result = results_queue.get(timeout=5.0)
+            if "error" in result:
+                errors.append(result["error"])
             else:
-                total_messages += result['messages']
-                total_time = max(total_time, result['duration'])
+                total_messages += result["messages"]
+                wall_time = max(wall_time, result["duration"])
+                total_client_time += result["duration"]
 
-        # Stop server
         server_process.stop()
 
-        # Analyze results
         if errors:
             pytest.fail(f"Performance test had errors: {errors}")
 
-        throughput = total_messages / total_time if total_time > 0 else 0
-        avg_latency = (total_time * 1000) / total_messages if total_messages > 0 else 0
+        assert total_messages > 0, "No successful round-trips"
+        throughput = total_messages / wall_time if wall_time > 0 else 0
+        avg_latency = (total_client_time * 1000) / total_messages if total_messages > 0 else 0
 
-        print(".2f"        print(".2f"
-        # Basic performance assertions
+        print(f"Throughput: {throughput:.2f} msg/sec")
+        print(f"Avg latency: {avg_latency:.2f} ms")
         assert throughput > 10, f"Throughput too low: {throughput} msg/sec"
         assert avg_latency < 100, f"Latency too high: {avg_latency} ms"
 
-        print("✅ Performance test completed successfully")
-
-    except Exception as e:
+    except Exception:
         server_process.stop()
         raise
 
@@ -364,22 +351,23 @@ def test_someip_message_format_compliance():
     # Test valid message header
     import struct
 
-    # Create a valid SOME/IP header
-    header_data = struct.pack(">LHHHHLHH",
-                            0xFFFFFFFF,  # Magic
-                            16,          # Length
-                            0x1234,      # Service ID
-                            0x5678,      # Method ID
-                            16,          # Length field
-                            0xABCD,      # Client ID
-                            0x0001,      # Session ID
-                            0x0100,      # Protocol + Interface version
-                            0x0000)      # Message type + Return code
-
-    # In a full implementation, this would test the Message class
-    # parsing and validation logic
+    # Create a valid SOME/IP header (16 bytes):
+    #   Service ID (H) | Method ID (H) | Length (I) |
+    #   Client ID (H)  | Session ID (H) |
+    #   Proto Ver (B) | Iface Ver (B) | Msg Type (B) | Return Code (B)
+    header_data = struct.pack(">HHIHHBBBB",
+                            0xFFFF,  # Service ID
+                            0xFFFF,  # Method ID
+                            8,       # Length (Client ID .. Return Code, no payload)
+                            0x1234,  # Client ID
+                            0x0001,  # Session ID
+                            0x01,    # Protocol Version
+                            0x00,    # Interface Version
+                            0x00,    # Message Type
+                            0x00)    # Return Code
 
     assert len(header_data) == 16, "Header should be 16 bytes"
-    assert header_data[:4] == b'\xFF\xFF\xFF\xFF', "Magic bytes incorrect"
-
-    print("✅ SOME/IP message format compliance test passed")
+    assert header_data[:4] == b'\xFF\xFF\xFF\xFF', "Service/Method ID bytes incorrect"
+    assert header_data[4:8] == b'\x00\x00\x00\x08', "Length field should be 8 (big-endian)"
+    assert header_data[8:10] == b'\x12\x34', "Client ID bytes incorrect"
+    assert header_data[10:12] == b'\x00\x01', "Session ID bytes incorrect"

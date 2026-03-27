@@ -185,12 +185,15 @@ Result UdpTransport::join_multicast_group(const std::string& multicast_address) 
 
     struct ip_mreq mreq;
     mreq.imr_multiaddr.s_addr = someip_inet_addr(multicast_address.c_str());
-    mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+    if (!config_.multicast_interface.empty()) {
+        mreq.imr_interface.s_addr = someip_inet_addr(config_.multicast_interface.c_str());
+    } else {
+        mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+    }
 
     if (someip_setsockopt(socket_fd_, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
         // In containerized/CI environments, multicast may not be available
         // Continue without multicast support rather than failing
-        // This allows SOME/IP to work with unicast-only networking
     }
 
     // Enable multicast loopback for local testing
@@ -199,13 +202,13 @@ Result UdpTransport::join_multicast_group(const std::string& multicast_address) 
         // Not critical, continue
     }
 
-    // Set multicast TTL from config (per SOME/IP spec, default 1 = local network only)
+    // Set multicast TTL from config
     int ttl = config_.multicast_ttl;
     if (someip_setsockopt(socket_fd_, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl)) < 0) {
         // Not critical, continue
     }
 
-    // Set multicast interface if specified
+    // Pin outgoing multicast to the configured interface
     if (!config_.multicast_interface.empty()) {
         struct in_addr interface_addr;
         interface_addr.s_addr = someip_inet_addr(config_.multicast_interface.c_str());
@@ -231,7 +234,11 @@ Result UdpTransport::leave_multicast_group(const std::string& multicast_address)
 
     struct ip_mreq mreq;
     mreq.imr_multiaddr.s_addr = someip_inet_addr(multicast_address.c_str());
-    mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+    if (!config_.multicast_interface.empty()) {
+        mreq.imr_interface.s_addr = someip_inet_addr(config_.multicast_interface.c_str());
+    } else {
+        mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+    }
 
     if (someip_setsockopt(socket_fd_, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
         return Result::NETWORK_ERROR;
@@ -346,13 +353,14 @@ void UdpTransport::receive_loop() {
     std::vector<uint8_t> buffer(config_.receive_buffer_size);
 
     while (running_) {
+        buffer.resize(config_.receive_buffer_size);
         Endpoint sender;
         Result result = receive_data(buffer, sender);
 
         if (result == Result::SUCCESS) {
             // Try to deserialize message
             MessagePtr message = platform::allocate_message();
-            if (message->deserialize(buffer)) {  // Deserialize from the received buffer
+            if (message->deserialize(buffer)) {
                 // Add to queue
                 {
                     platform::ScopedLock lock(queue_mutex_);
