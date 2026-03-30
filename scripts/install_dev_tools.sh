@@ -74,6 +74,23 @@ if [[ "${CI:-}" == "true" || "${CI:-}" == "1" ]]; then
 fi
 
 # ------------------------------------------------------------------------------
+# Privilege escalation helper
+# ------------------------------------------------------------------------------
+run_privileged() {
+    if [[ "$(id -u)" -eq 0 ]]; then
+        "$@"
+    elif command -v sudo &> /dev/null && sudo -n true 2>/dev/null; then
+        sudo "$@"
+    elif [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+        echo "❌ Non-interactive mode requires root or passwordless sudo: $*"
+        exit 1
+    else
+        echo "⚠️  Root privileges required. Attempting sudo..."
+        sudo "$@"
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # Detect OS / package manager
 # ------------------------------------------------------------------------------
 if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -118,15 +135,15 @@ install_system_packages() {
             case $PACKAGE_MANAGER in
                 apt)
                     echo "🐧 Installing with apt (Ubuntu/Debian)..."
-                    sudo apt-get update
+                    run_privileged apt-get update
                     # --no-install-recommends keeps the container slim
-                    sudo apt-get install -y --no-install-recommends clang-tidy clang-format cppcheck lcov python3-pip
+                    run_privileged apt-get install -y --no-install-recommends clang-tidy clang-format cppcheck lcov python3-pip
                     echo "✅ System packages installed"
                     ;;
 
                 yum)
                     echo "🐧 Installing with yum (RHEL/CentOS)..."
-                    sudo yum install -y clang-tools-extra cppcheck lcov python3-pip
+                    run_privileged yum install -y clang-tools-extra cppcheck lcov python3-pip
                     echo "✅ System packages installed"
                     ;;
 
@@ -172,14 +189,22 @@ install_python_packages() {
     echo "📦 Installing Python packages with: ${PIP_CMD[*]}"
 
     if [[ "$DEVCONTAINER_MODE" -eq 1 ]]; then
-        sudo "${PIP_CMD[@]}" install --upgrade pip
-        sudo "${PIP_CMD[@]}" install gcovr pytest pytest-cov sphinx sphinx-needs sphinxcontrib-plantuml
+        run_privileged "${PIP_CMD[@]}" install --upgrade pip
+        run_privileged "${PIP_CMD[@]}" install gcovr pytest pytest-cov sphinx sphinx-needs sphinxcontrib-plantuml
     elif [ -n "$VIRTUAL_ENV" ]; then
         "${PIP_CMD[@]}" install --upgrade pip
         "${PIP_CMD[@]}" install gcovr pytest pytest-cov sphinx sphinx-needs sphinxcontrib-plantuml
     else
         "${PIP_CMD[@]}" install --user --upgrade pip
         "${PIP_CMD[@]}" install --user gcovr pytest pytest-cov sphinx sphinx-needs sphinxcontrib-plantuml
+
+        USER_BIN="$(python3 -m site --user-base)/bin"
+        if [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
+            echo ""
+            echo "⚠️  Python user bin directory is not on PATH."
+            echo "   Add this to your shell profile:"
+            echo "   export PATH=\"$USER_BIN:\$PATH\""
+        fi
     fi
 
     echo "✅ Python packages installed"
@@ -204,12 +229,22 @@ verify_installations() {
 
     echo ""
     echo "Python packages:"
-    # gcovr provides a module named "gcovr"; pytest provides "pytest"
     for package in gcovr pytest; do
         if python3 -c "import $package" 2>/dev/null; then
-            echo "  ✅ $package - installed"
+            echo "  ✅ $package (module) - installed"
         else
-            echo "  ❌ $package - not found"
+            echo "  ❌ $package (module) - not found"
+            all_good=false
+        fi
+    done
+
+    echo ""
+    echo "Python CLI tools:"
+    for cli_tool in gcovr pytest sphinx-build; do
+        if command -v "$cli_tool" &> /dev/null; then
+            echo "  ✅ $cli_tool - $(command -v "$cli_tool")"
+        else
+            echo "  ⚠️  $cli_tool - not found on PATH"
             all_good=false
         fi
     done
